@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: hi-level-lbank
+  group: high_level-lbank
   cancel-in-progress: true
 
 jobs:
@@ -27,8 +27,8 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements.txt
 
-    - name: Run Hi-Level
-      run: python high_level.py
+    - name: Run High_Level
+      run: python High_Level.py
 
     - name: Commit and push CSV
       run: |
