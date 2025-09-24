@@ -1,4 +1,4 @@
-name: Hi-Level Whale Monitor (LBank) - Debuggable
+name: High_Level Whale Monitor (LBank) - Debuggable
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:         # اجرای دستی هم فعال
 
 concurrency:
-  group: hi-level-lbank
+  group: High_Level-lbank
   cancel-in-progress: true
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
         mkdir -p data
         mkdir -p logs
 
-    - name: Run Hi-Level script (try different filenames)
+    - name: Run High_Level script (try different filenames)
       run: |
         echo "🚀 Starting Hi-Level script..."
         if [ -f high_level.py ]; then
