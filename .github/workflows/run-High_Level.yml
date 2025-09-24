@@ -1,27 +1,24 @@
-name: High_Level Whale Monitor (LBank) - Debuggable
+name: Hi-Level Whale Monitor (LBank) - High_Level
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # هر 5 دقیقه (اختیاری)
-  workflow_dispatch:         # اجرای دستی هم فعال
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 concurrency:
-  group: High_Level-lbank
+  group: hi-level-lbank
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     defaults:
       run:
-        working-directory: ./   # اجرای همه دستورات در ریشه ریپو
+        working-directory: ./
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -31,42 +28,24 @@ jobs:
     - name: Install dependencies (safe)
       run: |
         if [ -f requirements.txt ]; then
-          echo "🔁 Installing from requirements.txt"
           pip install -r requirements.txt
         else
-          echo "⚠️ requirements.txt not found — installing minimal deps"
           pip install requests pandas loguru
         fi
 
     - name: Ensure logs & data folders exist
       run: |
-        mkdir -p data
-        mkdir -p logs
+        mkdir -p data logs
 
-    - name: Run High_Level script (try different filenames)
+    - name: Run High_Level script
       run: |
-        echo "🚀 Starting Hi-Level script..."
-        if [ -f high_level.py ]; then
-          python high_level.py || (echo "❌ high_level.py failed" && exit 1)
-        elif [ -f High_Level.py ]; then
-          python High_Level.py || (echo "❌ High_Level.py failed" && exit 1)
-        elif [ -f fetch_and_notify.py ]; then
-          python fetch_and_notify.py || (echo "❌ fetch_and_notify.py failed" && exit 1)
-        else
-          echo "⚠️ No recognized script found (high_level.py / High_Level.py / fetch_and_notify.py)"
-        fi
+        echo "🚀 Starting High_Level..."
+        python High_Level.py
 
-    - name: Show run_log.txt (last 200 lines)
+    - name: Show run_log.txt
       run: |
-        if [ -f logs/run_log.txt ]; then
-          echo "📜 Showing last 200 lines of logs/run_log.txt"
-          tail -n 200 logs/run_log.txt || true
-        elif [ -f run_log.txt ]; then
-          echo "📜 Showing last 200 lines of run_log.txt"
-          tail -n 200 run_log.txt || true
-        else
-          echo "⚠️ run_log.txt not found"
-        fi
+        if [ -f logs/run_log.txt ]; then tail -n 200 logs/run_log.txt; fi
+        if [ -f run_log.txt ]; then tail -n 200 run_log.txt; fi
 
     - name: Commit and push CSV & logs (if any)
       run: |
@@ -79,26 +58,5 @@ jobs:
 
     - name: Debug and Show data CSV (safe)
       run: |
-        echo "📁 Repo root:"
-        ls -la || true
-        echo
-        echo "📂 data folder contents:"
-        if [ -d data ]; then
-          ls -la data || true
-          echo
-          for f in data/*; do
-            [ -e "$f" ] || continue
-            echo "---- FILE: $f ----"
-            # portable file info
-            if command -v stat >/dev/null 2>&1; then
-              stat -c '%n %s bytes %U %G %A' "$f" 2>/dev/null || stat "$f" || true
-            fi
-            file "$f" 2>/dev/null || true
-            echo "lines: $(wc -l < "$f" 2>/dev/null || echo unknown)"
-            echo "---- first 20 lines ----"
-            head -n 20 "$f" || true
-            echo
-          done
-        else
-          echo "⚠️ data folder not found"
-        fi
+        echo "📂 data folder contents:"; ls -la data || echo "data missing"
+        for f in data/*; do [ -e "$f" ] || continue; echo "---- $f ----"; stat -c '%n %s bytes' "$f" 2>/dev/null || true; head -n 20 "$f" || true; done
