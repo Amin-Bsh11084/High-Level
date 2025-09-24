@@ -1,1 +1,48 @@
+name: High_Level Whale Monitor (LBank)
 
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # هر 5 دقیقه
+  workflow_dispatch:
+
+concurrency:
+  group: hi-level-lbank
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run Hi-Level
+      run: python high_level.py
+
+    - name: Commit and push CSV
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git pull --rebase origin main
+        git add data/data.csv logs/run_log.txt || echo "No files to add"
+        git commit -m "Update whale data.csv [skip ci]" || echo "No changes to commit"
+        git push origin main || echo "Nothing to push"
+
+    - name: Show CSV preview
+      run: |
+        if [ -f data/data.csv ]; then
+          head -n 20 data/data.csv
+        else
+          echo "⚠️ CSV file not found!"
+        fi
