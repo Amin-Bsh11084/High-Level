@@ -1,9 +1,9 @@
-name: High_Level Whale Monitor (LBank) - Debuggable Full
+name: High_Level Whale Monitor (LBank) - Ensure Logs
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch:
 
 concurrency:
   group: high_level-lbank
@@ -12,7 +12,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: ./
@@ -35,31 +34,31 @@ jobs:
           pip install -r requirements.txt
         else
           echo "⚠️ requirements.txt not found — installing minimal deps"
-          pip install requests pandas loguru
+          pip install requests pandas loguru || pip install requests pandas
         fi
+      shell: bash
 
     - name: Ensure logs & data folders exist
       run: |
-        mkdir -p data
-        mkdir -p logs
-        # create .gitkeep so folder is tracked after commit
-        if [ ! -f data/.gitkeep ]; then
-          touch data/.gitkeep
-        fi
+        mkdir -p data logs
+        if [ ! -f data/.gitkeep ]; then touch data/.gitkeep; fi
+      shell: bash
 
-    - name: Run High_Level script (capture output)
+    - name: Run High_Level script (capture output, record exit code)
       id: run_high_level
       run: |
         set -o pipefail
         echo "RUN: python -u High_Level.py (capturing output to run_script_output.log)"
+        # Run the script (use fallback lowercase name if present). Capture exit code in file.
         if [ -f High_Level.py ]; then
           python -u High_Level.py 2>&1 | tee run_script_output.log
+          echo $? > run_exit_code.txt
         elif [ -f high_level.py ]; then
-          # backward-compat fallback if someone left lower-case file
           python -u high_level.py 2>&1 | tee run_script_output.log
+          echo $? > run_exit_code.txt
         else
           echo "⚠️ No script found: High_Level.py or high_level.py" | tee run_script_output.log
-          exit 1
+          echo 127 > run_exit_code.txt
         fi
       shell: bash
 
@@ -70,13 +69,77 @@ jobs:
         name: high-level-run-log
         path: run_script_output.log
 
-    - name: Show run_log.txt (if exists)
+    - name: Print run script exit code (always)
       if: always()
       run: |
-        if [ -f logs/run_log.txt ]; then
-          echo "📜 Showing last 200 lines of logs/run_log.txt"
-          tail -n 200 logs/run_log.txt || true
-        elif [ -f run_log.txt ]; then
-          echo "📜 Showing last 200 lines of run_log.txt"
-          tail -n 200 run_log.txt || true
+        echo "=== run exit code ==="
+        if [ -f run_exit_code.txt ]; then
+          cat run_exit_code.txt || true
         else
+          echo "no run_exit_code.txt"
+        fi
+      shell: bash
+
+    - name: Show run_script_output.log (safe, always)
+      if: always()
+      run: |
+        echo "=== begin run_script_output.log (first 1000 lines) ==="
+        if [ -f run_script_output.log ]; then
+          sed -n '1,1000p' run_script_output.log 2>&1 || true
+        else
+          echo "no run_script_output.log found"
+        fi
+        echo "=== end run_script_output.log ==="
+      shell: bash
+
+    - name: Show logs/run_log.txt (safe, always)
+      if: always()
+      run: |
+        echo "=== begin logs/run_log.txt (last 500 lines) ==="
+        if [ -f logs/run_log.txt ]; then
+          tail -n 500 logs/run_log.txt 2>&1 || true
+        else
+          echo "no logs/run_log.txt found"
+        fi
+        echo "=== end logs/run_log.txt ==="
+      shell: bash
+
+    - name: Debug - show data folder and first lines of CSVs (always)
+      if: always()
+      run: |
+        echo "=== data folder listing ==="
+        if [ -d data ]; then
+          ls -la data || true
+          for f in data/*; do
+            [ -e "$f" ] || continue
+            echo "---- FILE: $f ----"
+            if command -v stat >/dev/null 2>&1; then
+              stat -c '%n %s bytes %U %G %A' "$f" 2>/dev/null || stat "$f" || true
+            fi
+            echo "---- head (50) ----"
+            head -n 50 "$f" 2>&1 || true
+            echo
+          done
+        else
+          echo "data folder not found"
+        fi
+      shell: bash
+
+    - name: Upload data folder artifact (always)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: high-level-data-folder
+        path: data
+
+    - name: Commit and push data & logs (if any, safe)
+      if: always()
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git pull --rebase origin main || true
+        # add files (non-failing)
+        git add data/* logs/run_log.txt run_script_output.log run_exit_code.txt || true
+        git commit -m "Update High_Level data & logs [skip ci]" || echo "No changes to commit"
+        git push origin main || echo "Nothing to push or push failed"
+      shell: bash
