@@ -1,4 +1,4 @@
-name: Hi-Level Whale Monitor (LBank) - Debuggable Full
+name: High_Level Whale Monitor (LBank) - Debuggable Full
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: hi-level-lbank
+  group: high_level-lbank
   cancel-in-progress: true
 
 jobs:
@@ -42,6 +42,7 @@ jobs:
       run: |
         mkdir -p data
         mkdir -p logs
+        # create .gitkeep so folder is tracked after commit
         if [ ! -f data/.gitkeep ]; then
           touch data/.gitkeep
         fi
@@ -54,6 +55,7 @@ jobs:
         if [ -f High_Level.py ]; then
           python -u High_Level.py 2>&1 | tee run_script_output.log
         elif [ -f high_level.py ]; then
+          # backward-compat fallback if someone left lower-case file
           python -u high_level.py 2>&1 | tee run_script_output.log
         else
           echo "⚠️ No script found: High_Level.py or high_level.py" | tee run_script_output.log
@@ -78,82 +80,3 @@ jobs:
           echo "📜 Showing last 200 lines of run_log.txt"
           tail -n 200 run_log.txt || true
         else
-          echo "⚠️ run_log.txt not found"
-        fi
-
-    - name: Commit and push data & logs (if any)
-      if: always()
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git pull --rebase origin main || true
-        # add run outputs (per-run CSVs), cumulative csv, logs and the captured run log
-        git add data/* logs/run_log.txt run_script_output.log || echo "No files to add"
-        git commit -m "Update high-level data & logs [skip ci]" || echo "No changes to commit"
-        git push origin main || echo "Nothing to push"
-
-    - name: Debug - print repo & data info (always)
-      if: always()
-      run: |
-        echo "=== PWD ==="
-        pwd
-        echo
-        echo "=== Runner user & shell ==="
-        id || true
-        echo "SHELL=$SHELL"
-        echo
-        echo "=== List root (short) ==="
-        ls -la || true
-        echo
-        echo "=== Find data files (maxdepth 2) ==="
-        if [ -d data ]; then
-          find data -maxdepth 2 -type f -printf "%p %s bytes\n" 2>/dev/null || ls -la data || true
-        else
-          echo "data folder not found"
-        fi
-        echo
-        echo "=== Show .gitignore (if any) ==="
-        [ -f .gitignore ] && sed -n '1,200p' .gitignore || echo "no .gitignore"
-        echo
-        echo "=== Show run logs (if exist) ==="
-        if [ -f logs/run_log.txt ]; then
-          echo "---- last 200 lines logs/run_log.txt ----"
-          tail -n 200 logs/run_log.txt 2>&1 || true
-          echo "---- end logs ----"
-        elif [ -f run_log.txt ]; then
-          echo "---- last 200 lines run_log.txt ----"
-          tail -n 200 run_log.txt 2>&1 || true
-          echo "---- end logs ----"
-        else
-          echo "no run_log.txt found"
-        fi
-        echo
-        echo "=== Show CSV files first 20 lines (and capture stderr) ==="
-        if [ -d data ]; then
-          for f in data/*; do
-            [ -e "$f" ] || continue
-            echo "---- FILE: $f ----"
-            if command -v stat >/dev/null 2>&1; then
-              stat -c '%n %s bytes %U %G %A' "$f" 2>/dev/null || stat "$f" || true
-            fi
-            echo "---- head (20) stdout+stderr ----"
-            head -n 20 "$f" 2>&1 || true
-            echo "---- wc -l ----"
-            wc -l "$f" 2>&1 || true
-            echo
-          done
-        else
-          echo "data folder not found"
-        fi
-        echo
-        echo "=== Git status and last commits ==="
-        git status --porcelain -b || true
-        git --no-pager log -n 5 --oneline --decorate || true
-      shell: bash
-
-    - name: Upload data folder artifact (always)
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: high-level-data-folder
-        path: data
