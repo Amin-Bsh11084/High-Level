@@ -1,17 +1,21 @@
-name: High_Level Whale Monitor (LBank)
+name: Hi-Level Whale Monitor (LBank) - Debuggable
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # هر 5 دقیقه
-  workflow_dispatch:
+    - cron: "*/5 * * * *"   # هر 5 دقیقه (اختیاری)
+  workflow_dispatch:         # اجرای دستی هم فعال
 
 concurrency:
-  group: high_level-lbank
+  group: hi-level-lbank
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./   # اجرای همه دستورات در ریشه ریپو
 
     steps:
     - name: Checkout repository
@@ -24,25 +28,77 @@ jobs:
       with:
         python-version: "3.11"
 
-    - name: Install dependencies
-      run: pip install -r requirements.txt
+    - name: Install dependencies (safe)
+      run: |
+        if [ -f requirements.txt ]; then
+          echo "🔁 Installing from requirements.txt"
+          pip install -r requirements.txt
+        else
+          echo "⚠️ requirements.txt not found — installing minimal deps"
+          pip install requests pandas loguru
+        fi
 
-    - name: Run High_Level
-      run: python High_Level.py
+    - name: Ensure logs & data folders exist
+      run: |
+        mkdir -p data
+        mkdir -p logs
 
-    - name: Commit and push CSV
+    - name: Run Hi-Level script (try different filenames)
+      run: |
+        echo "🚀 Starting Hi-Level script..."
+        if [ -f high_level.py ]; then
+          python high_level.py || (echo "❌ high_level.py failed" && exit 1)
+        elif [ -f High_Level.py ]; then
+          python High_Level.py || (echo "❌ High_Level.py failed" && exit 1)
+        elif [ -f fetch_and_notify.py ]; then
+          python fetch_and_notify.py || (echo "❌ fetch_and_notify.py failed" && exit 1)
+        else
+          echo "⚠️ No recognized script found (high_level.py / High_Level.py / fetch_and_notify.py)"
+        fi
+
+    - name: Show run_log.txt (last 200 lines)
+      run: |
+        if [ -f logs/run_log.txt ]; then
+          echo "📜 Showing last 200 lines of logs/run_log.txt"
+          tail -n 200 logs/run_log.txt || true
+        elif [ -f run_log.txt ]; then
+          echo "📜 Showing last 200 lines of run_log.txt"
+          tail -n 200 run_log.txt || true
+        else
+          echo "⚠️ run_log.txt not found"
+        fi
+
+    - name: Commit and push CSV & logs (if any)
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git pull --rebase origin main
+        git pull --rebase origin main || true
         git add data/data.csv logs/run_log.txt || echo "No files to add"
         git commit -m "Update whale data.csv [skip ci]" || echo "No changes to commit"
         git push origin main || echo "Nothing to push"
 
-    - name: Show CSV preview
+    - name: Debug and Show data CSV (safe)
       run: |
-        if [ -f data/data.csv ]; then
-          head -n 20 data/data.csv
+        echo "📁 Repo root:"
+        ls -la || true
+        echo
+        echo "📂 data folder contents:"
+        if [ -d data ]; then
+          ls -la data || true
+          echo
+          for f in data/*; do
+            [ -e "$f" ] || continue
+            echo "---- FILE: $f ----"
+            # portable file info
+            if command -v stat >/dev/null 2>&1; then
+              stat -c '%n %s bytes %U %G %A' "$f" 2>/dev/null || stat "$f" || true
+            fi
+            file "$f" 2>/dev/null || true
+            echo "lines: $(wc -l < "$f" 2>/dev/null || echo unknown)"
+            echo "---- first 20 lines ----"
+            head -n 20 "$f" || true
+            echo
+          done
         else
-          echo "⚠️ CSV file not found!"
+          echo "⚠️ data folder not found"
         fi
