@@ -1,4 +1,4 @@
-name: High-Level Whale Monitor (LBank)
+name: High_Level Whale Monitor (LBank)
 
 on:
   schedule:
