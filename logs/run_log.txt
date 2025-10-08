@@ -96,3 +96,17 @@
 2025-10-08T21:03:41Z    BTC    100000.0         0.8           None         250000            True        buy             True           120000                 300000                   50000            2.1         0.010           8.0       strong                  0.35                        True data/high_level_20251008_210341.csv
 2025-10-08T21:03:41Z    ETH      4000.0        -0.6           None          50000            True       sell            False           500000                      0                       0           -1.0        -0.005           1.0         weak                 -0.10                       False data/high_level_20251008_210341.csv
 2025-10-08T21:03:41Z    BNB       650.0         0.2           None         120000            True       sell             True            80000                  10000                  250000            0.5         0.000           8.0       strong                  0.05                       False data/high_level_20251008_210341.csv
+2025-10-08 21:12:27 | INFO | 🚀 High_Level started.
+2025-10-08 21:12:27 | INFO | 📌 CONFIG: {"SYMBOLS": [], "MAX_SYMBOLS": 200, "COINGLASS_KEY": "", "COINGLASS_BASE": "https://open-api-v4.coinglass.com", "TAKER_INTERVAL": "4h", "TAKER_ALERT": 0.3, "ENABLE_LBANK": false, "LBANK_BASE": "https://api.lbkex.com", "LOOKBACK_MIN": 10, "TRADE_USD_MIN": 100000.0, "SWEEP_DEPTH_USD": 150000.0, "COINGLASS_LIQ_MIN": 200000.0, "W_LARGE_TRADE": 2.0, "W_SWEEP": 2.0, "W_LIQ": 2.0, "W_OI": 1.0, "W_PCT": 1.0, "LABEL_STRONG": 5.0, "LABEL_PROBABLE": 3.0, "FORCE_DEMO": false}
+2025-10-08 21:12:27 | WARNING | HTTP error on https://fapi.binance.com/fapi/v1/exchangeInfo: 451 Client Error:  for url: https://fapi.binance.com/fapi/v1/exchangeInfo
+2025-10-08 21:12:27 | INFO | Universe from Binance futures (USDT): 0 bases.
+2025-10-08 21:12:27 | INFO | 🧪 Universe size = 0 (cap=200) | Interval=4h
+2025-10-08 21:12:27 | WARNING | ⚠️ No real taker data — switching to DEMO rows.
+2025-10-08 21:12:27 | INFO | ✅ CSV saved: data/high_level_20251008_211227.csv
+2025-10-08 21:12:27 | INFO | ✅ CSV saved (latest): data/latest.csv
+2025-10-08 21:12:27 | INFO | ✅ Completed. Rows: 3
+2025-10-08 21:12:27 | INFO | 
+       timestamp_utc symbol  price_last  pct_change total_quote_5m  max_trade_usd  whale_detected whale_side  orderbook_sweep  sweep_depth_usd  coinglass_liq_buy_usd  coinglass_liq_sell_usd  oi_change_pct  funding_rate  signal_score signal_label  taker_delta_interval  taker_delta_alert_interval                            run_file
+2025-10-08T21:12:27Z    BTC         0.0         0.0           None            0.0            True        buy            False              0.0                    0.0                     0.0            0.0           0.0           0.0      neutral                  0.35                        True data/high_level_20251008_211227.csv
+2025-10-08T21:12:27Z    ETH         0.0         0.0           None            0.0            True       sell            False              0.0                    0.0                     0.0            0.0           0.0           0.0      neutral                 -0.10                       False data/high_level_20251008_211227.csv
+2025-10-08T21:12:27Z    BNB         0.0         0.0           None            0.0            True        buy            False              0.0                    0.0                     0.0            0.0           0.0           0.0      neutral                  0.05                       False data/high_level_20251008_211227.csv
