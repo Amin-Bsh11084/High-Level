@@ -1,15 +1,36 @@
 # High_Level.py
 """
-High_Level — Market-wide taker delta scanner (CoinGlass 4h free-friendly) + Binance fallback
-- یونیورس نمادها به‌صورت محکم از Binance (Futures USDT و در صورت لزوم Spot USDT) کشف می‌شود.
-- خروجی یونیورس در data/universe.csv ذخیره می‌شود تا قابل بررسی باشد.
-- اگر CoinGlass/Binance در دسترس نباشند، DEMO برای تمام یونیورس اجرا می‌شود (نه فقط 3 نماد).
-- CSV خروجی: data/high_level_YYYYMMDD_HHMMSS.csv و data/latest.csv
+High_Level — Market-wide taker delta (from LBank trades only)
+
+چه کار می‌کند؟
+- کشف یونیورس از LBank: همه‌ی جفت‌های *_USDT (Active)
+- برای هر نماد (BASEUSDT) در بازه‌ی مشخص (پیش‌فرض: 4h) تریدهای LBank را می‌گیرد،
+  سمت معامله (buy/sell) را تشخیص می‌دهد، و حجم quote را جمع می‌بندد:
+      buy_quote = sum(price * amount for buy trades)
+      sell_quote = sum(price * amount for sell trades)
+      delta = (buy_quote - sell_quote) / (buy_quote + sell_quote)
+- نتیجه را در CSV ذخیره می‌کند:
+    data/high_level_YYYYMMDD_HHMMSS.csv  و  data/latest.csv
+- لاگ‌ها در logs/run_log.txt
+
+نکات:
+- API عمومی LBank محدودیت‌ها/شکل پاسخ متفاوتی دارد. این کد چند مسیر رایج را امتحان می‌کند:
+    - جفت‌ها:   /v2/currencyPairs.do
+    - تریدها:   /v2/trades.do  یا /api/v2/trades  یا /api/v1/trades
+- اگر endpointها سایز کم برگرداند، ممکن است برای پنجره‌های خیلی بزرگ تمام تریدها را نگیرد.
+  برای تست/تولید معمولاً 4h یا 1h کافی است. ستون `trades_used` نشان می‌دهد چند رکورد واقعا محاسبه شده.
+
+Environment (اختیاری):
+  HL_TAKER_INTERVAL=4h    # بازه‌ی دلتا: 1h, 2h, 4h, 6h, 12h, 24h, 30m, 15m ...
+  HL_MAX_SYMBOLS=400      # سقف تعداد نمادها
+  HL_TAKER_ALERT=0.30     # آستانه‌ی هشدار |delta| >= 0.30
+  HL_FORCE_DEMO=false     # اگر true شود، داده‌ی دمو می‌سازد
 """
 
 import os
 import json
 import time
+import math
 import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -59,7 +80,7 @@ else:
     if not logger.handlers:
         logger.addHandler(sh); logger.addHandler(fh)
 
-logger.info("🚀 High_Level started.")
+logger.info("🚀 High_Level (LBank-only) started.")
 
 # ----------------------------
 # CONFIG
@@ -84,45 +105,38 @@ def getenv_bool(name: str, default: bool) -> bool:
         return default
     return v.strip().lower() in ("1", "true", "yes", "y", "on")
 
-CONFIG = {
-    # Universe
-    "SYMBOLS": [s.strip().upper() for s in os.getenv("HL_SYMBOLS", "").split(",") if s.strip()],
-    "MAX_SYMBOLS": getenv_int("HL_MAX_SYMBOLS", 400),     # سقف بزرگتر
-    "EXCLUDE_STABLES": getenv_bool("HL_EXCLUDE_STABLES", True),  # حذف استیبل‌کوین‌ها از یونیورس
+def parse_interval_to_minutes(interval: str) -> int:
+    """
+    "4h" -> 240, "30m" -> 30, "1h" -> 60
+    """
+    s = interval.strip().lower()
+    if s.endswith("h"):
+        return int(float(s[:-1]) * 60)
+    if s.endswith("m"):
+        return int(float(s[:-1]))
+    # default hours if plain number
+    try:
+        return int(float(s) * 60)
+    except Exception:
+        return 240  # default 4h
 
-    # Taker (free-friendly)
-    "COINGLASS_KEY": os.getenv("COINGLASS_API_KEY", "").strip(),
-    "COINGLASS_BASE": os.getenv("COINGLASS_BASE", "https://open-api-v4.coinglass.com"),
+CONFIG = {
+    "LBANK_BASE": os.getenv("HL_LBANK_BASE", "https://api.lbkex.com").rstrip("/"),
     "TAKER_INTERVAL": os.getenv("HL_TAKER_INTERVAL", "4h"),
     "TAKER_ALERT": getenv_float("HL_TAKER_ALERT", 0.30),
-
-    # Optional LBank (خاموش برای سرعت)
-    "ENABLE_LBANK": getenv_bool("HL_ENABLE_LBANK", False),
-    "LBANK_BASE": os.getenv("HL_LBANK_BASE", "https://api.lbkex.com"),
-    "LOOKBACK_MIN": getenv_int("HL_LOOKBACK_MIN", 10),
-
-    # Scoring (اختیاری)
-    "TRADE_USD_MIN": getenv_float("HL_TRADE_USD_MIN", 100_000.0),
-    "SWEEP_DEPTH_USD": getenv_float("HL_SWEEP_DEPTH_USD", 150_000.0),
-    "COINGLASS_LIQ_MIN": getenv_float("HL_COINGLASS_LIQ_MIN", 200_000.0),
-    "W_LARGE_TRADE": getenv_float("HL_W_LARGE_TRADE", 2.0),
-    "W_SWEEP": getenv_float("HL_W_SWEEP", 2.0),
-    "W_LIQ": getenv_float("HL_W_LIQ", 2.0),
-    "W_OI": getenv_float("HL_W_OI", 1.0),
-    "W_PCT": getenv_float("HL_W_PCT", 1.0),
-    "LABEL_STRONG": getenv_float("HL_LABEL_STRONG", 5.0),
-    "LABEL_PROBABLE": getenv_float("HL_LABEL_PROBABLE", 3.0),
-
+    "MAX_SYMBOLS": getenv_int("HL_MAX_SYMBOLS", 400),
     "FORCE_DEMO": getenv_bool("HL_FORCE_DEMO", False),
+
+    # trade fetch tuning
+    "TRADE_PAGE_SIZE": getenv_int("HL_TRADE_PAGE_SIZE", 600),   # LBank معمولاً 600-200 تا
+    "TRADE_MAX_PAGES": getenv_int("HL_TRADE_MAX_PAGES", 5),     # سقف تکرار برای پوشش پنجره
+    "REQUEST_PAUSE": getenv_float("HL_REQUEST_PAUSE", 0.15),    # مکث بین درخواست‌ها
 }
-logger.info("📌 CONFIG: " + json.dumps({k: ("***" if (k=="COINGLASS_KEY" and v) else v) for k, v in CONFIG.items()}))
+logger.info("📌 CONFIG: " + json.dumps(CONFIG))
 
 # ----------------------------
-# Helpers
+# HTTP helper
 # ----------------------------
-def now_utc_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
 def safe_request_json(method: str, url: str, headers=None, params=None, timeout=20) -> Optional[dict]:
     try:
         r = requests.request(method=method, url=url, headers=headers, params=params, timeout=timeout)
@@ -132,189 +146,161 @@ def safe_request_json(method: str, url: str, headers=None, params=None, timeout=
         logger.warning(f"HTTP error on {url}: {e}")
         return None
 
-def _filter_out_stables(bases: List[str]) -> List[str]:
-    if not CONFIG["EXCLUDE_STABLES"]:
-        return bases
-    # فهرست ساده‌ی استیبل‌های معروف؛ می‌تونی کامل‌ترش کنی
-    stables = {"USDT","USDC","FDUSD","TUSD","DAI","BUSD","PYUSD","USDD","EURS","EURT","USTC","GHO"}
-    return [b for b in bases if b not in stables]
-
 # ----------------------------
-# Universe discovery (محکم + خروجی به CSV)
+# LBank — universe (*_USDT)
 # ----------------------------
-def _binance_futures_bases() -> List[str]:
-    info = safe_request_json("GET", "https://fapi.binance.com/fapi/v1/exchangeInfo")
-    bases = []
-    if info and isinstance(info, dict) and "symbols" in info:
-        for s in info["symbols"]:
-            if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT":
-                base = str(s.get("baseAsset","")).upper()
-                if base:
-                    bases.append(base)
-    return sorted(set(bases))
-
-def _binance_spot_bases() -> List[str]:
-    info = safe_request_json("GET", "https://api.binance.com/api/v3/exchangeInfo")
-    bases = []
-    if info and isinstance(info, dict) and "symbols" in info:
-        for s in info["symbols"]:
-            if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT":
-                base = str(s.get("baseAsset","")).upper()
-                if base:
-                    bases.append(base)
-    return sorted(set(bases))
-
-def load_universe() -> List[str]:
+def lbank_list_usdt_pairs() -> List[str]:
     """
-    ترتیب کشف یونیورس:
-      1) HL_SYMBOLS (اگر ست شده)
-      2) data/symbols.csv (ستون 'symbol') — می‌تواند BASE یا BASEUSDT باشد
-      3) Binance Futures USDT bases (ترجیح)؛ اگر خالی، Binance Spot USDT
-    سپس حذف استیبل‌ها (اختیاری) و سقف HL_MAX_SYMBOLS اعمال می‌شود.
-    نتیجه در data/universe.csv ذخیره می‌شود.
+    برمی‌گرداند لیست جفت‌های *_USDT (مثل BTC_USDT) از LBank
     """
-    # 1) از ENV
-    if CONFIG["SYMBOLS"]:
-        bases = [s[:-4] if s.endswith("USDT") else s for s in CONFIG["SYMBOLS"]]
-        bases = sorted(set(bases))
-        logger.info(f"Universe: from HL_SYMBOLS ({len(bases)})")
-    else:
-        # 2) از فایل محلی
-        csv_path = DATA_DIR / "symbols.csv"
-        if csv_path.exists():
-            try:
-                df = pd.read_csv(csv_path)
-                if "symbol" in df.columns:
-                    vals = [str(x).strip().upper() for x in df["symbol"].tolist() if str(x).strip()]
-                    bases = [v[:-4] if v.endswith("USDT") else v for v in vals]
-                    bases = sorted(set(bases))
-                    logger.info(f"Universe: from data/symbols.csv ({len(bases)})")
-                else:
-                    bases = []
-            except Exception as e:
-                logger.warning(f"symbols.csv read failed: {e}")
-                bases = []
-        else:
-            bases = []
-
-        # 3) اگر هنوز خالی بود: Binance Futures → Spot
-        if not bases:
-            f_bases = _binance_futures_bases()
-            if f_bases:
-                bases = f_bases
-                logger.info(f"Universe: from Binance Futures ({len(bases)})")
-            else:
-                s_bases = _binance_spot_bases()
-                if s_bases:
-                    bases = s_bases
-                    logger.info(f"Universe: from Binance Spot ({len(bases)})")
-
-        if not bases:
-            logger.warning("Universe discovery failed — NO INTERNET or API blocked. Using last resort: BTC,ETH,BNB.")
-            bases = ["BTC","ETH","BNB"]
-
-    # حذف استیبل‌ها و سقف
-    before = len(bases)
-    bases = _filter_out_stables(bases)
-    after = len(bases)
-    if after != before:
-        logger.info(f"Filtered stables: {before} -> {after}")
-
-    bases = bases[: CONFIG["MAX_SYMBOLS"]]
-    # ذخیره یونیورس
-    try:
-        pd.DataFrame({"symbol": bases}).to_csv(DATA_DIR / "universe.csv", index=False)
-        logger.info(f"📄 Saved universe: data/universe.csv ({len(bases)} symbols)")
-    except Exception as e:
-        logger.warning(f"Save universe.csv failed: {e}")
-    return bases
-
-# ----------------------------
-# CoinGlass taker (4h) + Binance fallback
-# ----------------------------
-def fetch_coinglass_taker_interval(symbol_pair: str, interval: Optional[str]=None) -> Optional[dict]:
-    key = CONFIG["COINGLASS_KEY"]
-    if not key:
-        return None
-    interval = interval or CONFIG["TAKER_INTERVAL"]
-    headers = {"CG-API-KEY": key, "accept": "application/json"}
-    base = CONFIG["COINGLASS_BASE"].rstrip("/")
+    base = CONFIG["LBANK_BASE"]
     endpoints = [
-        f"{base}/api/futures/v2/taker-buy-sell-volume/history",
-        f"{base}/api/futures/aggregated-taker-buy-sell-volume/history",
-        f"{base}/api/futures/taker-buy-sell-volume/history",
-    ]
-    params_variants = [
-        {"pair": symbol_pair, "interval": interval},
-        {"symbol": symbol_pair, "interval": interval},
-        {"coin": symbol_pair.replace("USDT",""), "interval": interval},
+        f"{base}/v2/currencyPairs.do",
+        f"{base}/api/v2/currencyPairs",
+        f"{base}/api/v1/currencyPairs",
     ]
     for url in endpoints:
-        for params in params_variants:
-            data = safe_request_json("GET", url, headers=headers, params=params, timeout=20)
-            if not data:
-                continue
-            items = data.get("data") if isinstance(data, dict) and "data" in data else data
-            if isinstance(items, list) and len(items) > 0:
-                last = items[-1]
-                buy = float(last.get("buyVol") or last.get("buy_volume") or last.get("long") or 0.0)
-                sell = float(last.get("sellVol") or last.get("sell_volume") or last.get("short") or 0.0)
-                ts = int(last.get("timestamp") or last.get("time") or last.get("t") or 0)
-                return {"buyVol": buy, "sellVol": sell, "timestamp": ts}
-    return None
-
-def compute_taker_delta_with_fallback(base_symbol: str, interval: Optional[str]=None) -> Optional[float]:
-    interval = interval or CONFIG["TAKER_INTERVAL"]
-    pair = f"{base_symbol}USDT"
-
-    # 1) CoinGlass
-    try:
-        cg = fetch_coinglass_taker_interval(pair, interval=interval)
-        if cg:
-            buy, sell = cg["buyVol"], cg["sellVol"]
-            denom = buy + sell
-            return 0.0 if denom <= 0 else (buy - sell) / denom
-    except Exception as e:
-        logger.debug(f"CoinGlass delta error {base_symbol}: {e}")
-
-    # 2) Binance fallback
-    try:
-        url = "https://fapi.binance.com/futures/data/takerBuySellVol"
-        params = {"symbol": pair, "period": interval, "limit": 1}
-        data = safe_request_json("GET", url, params=params, timeout=15)
-        if data and isinstance(data, list) and len(data) > 0:
-            last = data[-1]
-            buy = float(last.get("buyVol", 0.0))
-            sell = float(last.get("sellVol", 0.0))
-            denom = buy + sell
-            return 0.0 if denom <= 0 else (buy - sell) / denom
-    except Exception as e:
-        logger.debug(f"Binance fallback delta error {base_symbol}: {e}")
-
-    # 3) No data
-    return None
+        data = safe_request_json("GET", url)
+        if not data:
+            continue
+        # برخی پاسخ‌ها: {"result":true,"data":["btc_usdt", ...]}
+        items = data.get("data") if isinstance(data, dict) else data
+        pairs = []
+        if isinstance(items, list):
+            for p in items:
+                if not isinstance(p, str):
+                    continue
+                up = p.upper()
+                if up.endswith("_USDT"):
+                    pairs.append(up)
+        pairs = sorted(set(pairs))
+        if pairs:
+            return pairs
+    return []
 
 # ----------------------------
-# (اختیاری) LBank parts — خاموش برای سرعت
+# LBank — recent trades for a pair
 # ----------------------------
-def collect_recent_trades_lbank(symbol: str, lookback_min: int) -> List[dict]:
-    return []  # intentionally disabled by default for speed
+def lbank_fetch_trades(pair: str, size: int) -> List[dict]:
+    """
+    می‌گیرد آخرین `size` ترید از LBank برای یک pair مثل 'BTC_USDT'
+    خروجی استاندارد: [{price: float, amount: float, side: 'buy'/'sell', ts: ms}]
+    """
+    base = CONFIG["LBANK_BASE"]
+    params = {"symbol": pair, "size": size}
+    urls = [
+        f"{base}/v2/trades.do",
+        f"{base}/api/v2/trades",
+        f"{base}/api/v1/trades",
+    ]
+    for url in urls:
+        data = safe_request_json("GET", url, params=params)
+        if not data:
+            continue
+        items = data.get("data") if isinstance(data, dict) else data
+        out = []
+        if isinstance(items, list):
+            for it in items:
+                try:
+                    price = float(it.get("price", it.get("deal_price", 0.0)))
+                    amt = float(it.get("amount", it.get("qty", it.get("deal_volume", 0.0))))
+                    side_raw = str(it.get("type", it.get("side", it.get("direction", "")))).lower()
+                    # normalize side
+                    if "buy" in side_raw or "bid" in side_raw:
+                        side = "buy"
+                    elif "sell" in side_raw or "ask" in side_raw:
+                        side = "sell"
+                    else:
+                        side = ""
+                    ts = int(it.get("time", it.get("ts", it.get("deal_time", 0))))
+                    out.append({"price": price, "amount": amt, "side": side, "ts": ts})
+                except Exception:
+                    continue
+        if out:
+            return out
+    return []
 
-def collect_orderbook_lbank(symbol: str) -> dict:
-    return {}
+def aggregate_taker_delta_from_trades(trades: List[dict], start_ts_ms: int, end_ts_ms: int) -> Tuple[float, float, int]:
+    """
+    داخل بازه [start_ts_ms, end_ts_ms) حجم quote خرید/فروش را جمع می‌بندد.
+    خروجی: (buy_quote, sell_quote, trades_used)
+    """
+    buy_q = 0.0
+    sell_q = 0.0
+    used = 0
+    for t in trades:
+        ts = int(t.get("ts") or 0)
+        if ts < start_ts_ms or ts >= end_ts_ms:
+            continue
+        price = float(t.get("price") or 0.0)
+        amt = float(t.get("amount") or 0.0)
+        side = t.get("side", "")
+        q = abs(price * amt)
+        if side == "buy":
+            buy_q += q
+        elif side == "sell":
+            sell_q += q
+        used += 1
+    return buy_q, sell_q, used
 
-def detect_large_trades(trades: List[dict], price_hint: Optional[float], min_usd: float) -> Tuple[bool, float, str]:
-    return (False, 0.0, "")
+def compute_delta_for_pair(pair: str, minutes: int) -> Tuple[Optional[float], float, float, int]:
+    """
+    تلاش می‌کند با چند بار fetch آخرین تریدها، بازه‌ی موردنیاز را پوشش دهد.
+    چون برخی endpointها پارامتر 'since' ندارند، با گرفتن آخرین N و فیلتر زمانی کار می‌کنیم.
+    خروجی: (delta, buy_quote, sell_quote, trades_used)
+    """
+    end_ts_ms = int(datetime.utcnow().timestamp() * 1000)
+    start_ts_ms = end_ts_ms - minutes * 60 * 1000
 
-def detect_orderbook_sweep(orderbook: dict, sweep_depth_usd: float, price_hint: Optional[float]) -> Tuple[bool, float]:
-    return (False, 0.0)
+    page_size = CONFIG["TRADE_PAGE_SIZE"]
+    max_pages = CONFIG["TRADE_MAX_PAGES"]
+    pause = CONFIG["REQUEST_PAUSE"]
 
-def coinglass_signal(m: dict, liq_min: float) -> Tuple[bool, float, float, float, float]:
-    return (False, 0.0, 0.0, 0.0, 0.0)
+    all_trades: List[dict] = []
 
-def fuse_score(lt, sw, cg_sig, pct_change: float) -> Tuple[float, str, str]:
-    # Minimal scoring off (we focus on taker delta). Keep API stable.
-    return (0.0, "neutral", "")
+    # تلاش‌های پیاپی: هر بار آخرین N ترید را می‌گیریم؛ اگر قدیمی‌ترین آن هنوز از start جدیدتر است، امیدواریم پوشش دهیم.
+    # (بعضی APIها فقط last N را می‌دهند، لذا ممکن است کل 4h را پوشش ندهد. در این صورت با همان مقدار محاسبه می‌کنیم.)
+    for _ in range(max_pages):
+        recent = lbank_fetch_trades(pair, size=page_size)
+        if not recent:
+            break
+        # LBank معمولاً جدیدترین در ابتدای لیست است؛ مرتب می‌کنیم تا صعودی شود.
+        recent_sorted = sorted(recent, key=lambda x: int(x.get("ts", 0)))
+        all_trades = recent_sorted  # چون هر بار همان last N است، جایگزین می‌کنیم
+        # اگر قدیمی‌ترین ترید از start قدیمی‌تر بود، احتمالاً پوشش کافی داریم و می‌شکنیم
+        if all_trades and int(all_trades[0].get("ts", end_ts_ms)) <= start_ts_ms:
+            break
+        time.sleep(pause)
+
+    if not all_trades:
+        return (None, 0.0, 0.0, 0)
+
+    buy_q, sell_q, used = aggregate_taker_delta_from_trades(all_trades, start_ts_ms, end_ts_ms)
+    denom = buy_q + sell_q
+    delta = (buy_q - sell_q) / denom if denom > 0 else None
+    return (delta, buy_q, sell_q, used)
+
+# ----------------------------
+# DEMO fallback (اگر FORCE_DEMO=true)
+# ----------------------------
+def build_demo_rows(pairs: List[str], minutes: int) -> List[dict]:
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = []
+    for i, p in enumerate(pairs):
+        sign = 1 if (i % 3 != 2) else -1
+        d = round(0.06 * sign, 4)  # ±6% برای تنوع
+        rows.append({
+            "timestamp_utc": now,
+            "pair": p,
+            "interval_min": minutes,
+            "taker_buy_quote": 100000.0 if d >= 0 else 60000.0,
+            "taker_sell_quote": 60000.0 if d >= 0 else 100000.0,
+            "trades_used": 300,
+            "taker_delta": d,
+            "taker_delta_alert": abs(d) >= CONFIG["TAKER_ALERT"],
+            "run_file": "",
+        })
+    return rows
 
 # ----------------------------
 # CSV saving
@@ -330,58 +316,80 @@ def save_output_csv(df: pd.DataFrame) -> str:
     return str(out_path)
 
 # ----------------------------
-# DEMO rows — برای تمام یونیورس
-# ----------------------------
-def build_demo_rows(symbols: List[str]) -> List[dict]:
-    now = now_utc_iso()
-    rows = []
-    for i, s in enumerate(symbols):
-        # الگویی ساده برای پخش مثبت/منفی
-        sign = 1 if (i % 4 in (0,1)) else -1
-        delta = round(0.05 * sign, 4)  # 5% برای دمو
-        rows.append({
-            "timestamp_utc": now,
-            "symbol": s,
-            "taker_delta_interval": delta,
-            "taker_delta_alert_interval": abs(delta) >= CONFIG["TAKER_ALERT"],
-            "run_file": "",
-        })
-    return rows
-
-# ----------------------------
 # Main
 # ----------------------------
 def run_pipeline() -> pd.DataFrame:
-    bases = load_universe()
-    logger.info(f"🧪 Universe size={len(bases)} | Interval={CONFIG['TAKER_INTERVAL']} | Max={CONFIG['MAX_SYMBOLS']}")
+    minutes = parse_interval_to_minutes(CONFIG["TAKER_INTERVAL"])
+    logger.info(f"⏱ Interval = {CONFIG['TAKER_INTERVAL']} ({minutes} min) | Alert >= {CONFIG['TAKER_ALERT']:.0%}")
 
+    # 1) کشف یونیورس از LBank
+    pairs = lbank_list_usdt_pairs()
+    if not pairs:
+        logger.warning("❗️ LBank pairs not found — falling back to BTC_USDT, ETH_USDT, BNB_USDT")
+        pairs = ["BTC_USDT", "ETH_USDT", "BNB_USDT"]
+
+    # سقف
+    pairs = pairs[: CONFIG["MAX_SYMBOLS"]]
+
+    # نمایش و ذخیره‌ی یونیورس برای شفافیت
+    try:
+        pd.DataFrame({"pair": pairs}).to_csv(DATA_DIR / "universe_lbank.csv", index=False)
+        logger.info(f"📄 Saved LBank universe: data/universe_lbank.csv ({len(pairs)} pairs)")
+    except Exception as e:
+        logger.warning(f"Save universe_lbank.csv failed: {e}")
+
+    # 2) اگر FORCE_DEMO فعال است، مستقیم دمو بساز
+    if CONFIG["FORCE_DEMO"]:
+        logger.warning("⚠️ FORCE_DEMO=true — generating demo rows.")
+        rows = build_demo_rows(pairs, minutes)
+        return pd.DataFrame(rows)
+
+    # 3) محاسبه‌ی دلتا برای هر جفت
     rows: List[dict] = []
-    throttle_every = 30
-    pause_sec = 0.6
+    throttle_every = 25
+    pause = CONFIG["REQUEST_PAUSE"]
 
-    for idx, sym in enumerate(bases, start=1):
+    for idx, pair in enumerate(pairs, start=1):
         try:
-            delta = compute_taker_delta_with_fallback(sym, interval=CONFIG["TAKER_INTERVAL"])
+            delta, buy_q, sell_q, used = compute_delta_for_pair(pair, minutes)
             alert = (abs(delta) >= CONFIG["TAKER_ALERT"]) if (delta is not None) else False
             if alert:
-                logger.info(f"⚠️ ALERT {sym} Δ{CONFIG['TAKER_INTERVAL']}: {delta:.2%}")
+                logger.info(f"⚠️ ALERT {pair} Δ{CONFIG['TAKER_INTERVAL']}: {delta:.2%}")
+
             rows.append({
-                "timestamp_utc": now_utc_iso(),
-                "symbol": sym,
-                "taker_delta_interval": delta,
-                "taker_delta_alert_interval": alert,
+                "timestamp_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pair": pair,
+                "interval_min": minutes,
+                "taker_buy_quote": round(buy_q, 4),
+                "taker_sell_quote": round(sell_q, 4),
+                "trades_used": int(used),
+                "taker_delta": (None if delta is None else round(delta, 6)),
+                "taker_delta_alert": bool(alert),
                 "run_file": "",
             })
-            if idx % throttle_every == 0:
-                time.sleep(pause_sec)
-        except Exception as e:
-            logger.error(f"[{sym}] error: {e}")
-            logger.debug(traceback.format_exc())
 
-    # اگر هیچ دیتایی نگرفتیم، دمو برای کل یونیورس
-    if not rows or all(r["taker_delta_interval"] is None for r in rows):
-        logger.warning("⚠️ No real taker data — switching to DEMO for entire universe.")
-        rows = build_demo_rows(bases)
+            if idx % throttle_every == 0:
+                time.sleep(pause)
+
+        except Exception as e:
+            logger.error(f"[{pair}] error: {e}")
+            logger.debug(traceback.format_exc())
+            rows.append({
+                "timestamp_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pair": pair,
+                "interval_min": minutes,
+                "taker_buy_quote": 0.0,
+                "taker_sell_quote": 0.0,
+                "trades_used": 0,
+                "taker_delta": None,
+                "taker_delta_alert": False,
+                "run_file": "",
+            })
+
+    # اگر هیچ دیتایی نشد، دمو برای همه‌ی جفت‌ها بساز
+    if not rows or all(r["taker_delta"] is None for r in rows):
+        logger.warning("⚠️ No real taker data — switching to DEMO for entire LBank universe.")
+        rows = build_demo_rows(pairs, minutes)
 
     return pd.DataFrame(rows)
 
@@ -400,10 +408,14 @@ def main() -> int:
         try:
             # حداقل خروجی
             pd.DataFrame([{
-                "timestamp_utc": now_utc_iso(),
-                "symbol": "N/A",
-                "taker_delta_interval": None,
-                "taker_delta_alert_interval": False,
+                "timestamp_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pair": "N/A",
+                "interval_min": parse_interval_to_minutes(CONFIG["TAKER_INTERVAL"]),
+                "taker_buy_quote": 0.0,
+                "taker_sell_quote": 0.0,
+                "trades_used": 0,
+                "taker_delta": None,
+                "taker_delta_alert": False,
                 "run_file": "",
             }]).to_csv(DATA_DIR / "latest.csv", index=False)
         except Exception:
