@@ -60,3 +60,39 @@
 2025-10-08T19:42:30Z    BTC    100000.0         0.8           None         250000            True        buy             True           120000                 300000                   50000            2.1         0.010           8.0       strong data/high_level_20251008_194230.csv
 2025-10-08T19:42:30Z    ETH      4000.0        -0.6           None          50000            True       sell            False           500000                      0                       0           -1.0        -0.005           1.0         weak data/high_level_20251008_194230.csv
 2025-10-08T19:42:30Z    BNB       650.0         0.2           None         120000            True       sell             True            80000                  10000                  250000            0.5         0.000           8.0       strong data/high_level_20251008_194230.csv
+2025-10-08 21:03:28 | INFO | 🚀 High_Level started (logging configured).
+2025-10-08 21:03:28 | INFO | 📌 CONFIG: {"SYMBOLS": ["BTC", "ETH", "BNB"], "LBANK_BASE": "https://api.lbkex.com", "COINGLASS_KEY": "", "COINGLASS_BASE": "https://open-api-v4.coinglass.com", "TRADE_USD_MIN": 100000.0, "SWEEP_DEPTH_USD": 150000.0, "COINGLASS_LIQ_MIN": 200000.0, "W_LARGE_TRADE": 2.0, "W_SWEEP": 2.0, "W_LIQ": 2.0, "W_OI": 1.0, "W_PCT": 1.0, "LABEL_STRONG": 5.0, "LABEL_PROBABLE": 3.0, "LOOKBACK_MIN": 10, "FORCE_DEMO": false, "TAKER_INTERVAL": "4h", "TAKER_ALERT": 0.3}
+2025-10-08 21:03:28 | INFO | 🧪 Symbols: ['BTC', 'ETH', 'BNB']
+2025-10-08 21:03:30 | WARNING | HTTP error on https://api.lbkex.com/api/v2/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/trades?symbol=BTC_USDT&size=200
+2025-10-08 21:03:30 | WARNING | HTTP error on https://api.lbkex.com/api/v1/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/trades?symbol=BTC_USDT&size=200
+2025-10-08 21:03:30 | WARNING | No trades fetched for BTC (LBank).
+2025-10-08 21:03:32 | WARNING | HTTP error on https://api.lbkex.com/api/v2/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/depth?symbol=BTC_USDT&size=60
+2025-10-08 21:03:33 | WARNING | HTTP error on https://api.lbkex.com/api/v1/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/depth?symbol=BTC_USDT&size=60
+2025-10-08 21:03:33 | WARNING | No orderbook fetched for BTC (LBank).
+2025-10-08 21:03:33 | INFO | CoinGlass API key not set — skipping CoinGlass taker fetch.
+2025-10-08 21:03:33 | WARNING | HTTP error on https://fapi.binance.com/futures/data/takerBuySellVol: 451 Client Error:  for url: https://fapi.binance.com/futures/data/takerBuySellVol?symbol=BTCUSDT&period=4h&limit=1
+2025-10-08 21:03:34 | WARNING | HTTP error on https://api.lbkex.com/api/v2/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/trades?symbol=ETH_USDT&size=200
+2025-10-08 21:03:35 | WARNING | HTTP error on https://api.lbkex.com/api/v1/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/trades?symbol=ETH_USDT&size=200
+2025-10-08 21:03:35 | WARNING | No trades fetched for ETH (LBank).
+2025-10-08 21:03:36 | WARNING | HTTP error on https://api.lbkex.com/api/v2/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/depth?symbol=ETH_USDT&size=60
+2025-10-08 21:03:37 | WARNING | HTTP error on https://api.lbkex.com/api/v1/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/depth?symbol=ETH_USDT&size=60
+2025-10-08 21:03:37 | WARNING | No orderbook fetched for ETH (LBank).
+2025-10-08 21:03:37 | INFO | CoinGlass API key not set — skipping CoinGlass taker fetch.
+2025-10-08 21:03:37 | WARNING | HTTP error on https://fapi.binance.com/futures/data/takerBuySellVol: 451 Client Error:  for url: https://fapi.binance.com/futures/data/takerBuySellVol?symbol=ETHUSDT&period=4h&limit=1
+2025-10-08 21:03:38 | WARNING | HTTP error on https://api.lbkex.com/api/v2/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/trades?symbol=BNB_USDT&size=200
+2025-10-08 21:03:39 | WARNING | HTTP error on https://api.lbkex.com/api/v1/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/trades?symbol=BNB_USDT&size=200
+2025-10-08 21:03:39 | WARNING | No trades fetched for BNB (LBank).
+2025-10-08 21:03:40 | WARNING | HTTP error on https://api.lbkex.com/api/v2/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/depth?symbol=BNB_USDT&size=60
+2025-10-08 21:03:41 | WARNING | HTTP error on https://api.lbkex.com/api/v1/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/depth?symbol=BNB_USDT&size=60
+2025-10-08 21:03:41 | WARNING | No orderbook fetched for BNB (LBank).
+2025-10-08 21:03:41 | INFO | CoinGlass API key not set — skipping CoinGlass taker fetch.
+2025-10-08 21:03:41 | WARNING | HTTP error on https://fapi.binance.com/futures/data/takerBuySellVol: 451 Client Error:  for url: https://fapi.binance.com/futures/data/takerBuySellVol?symbol=BNBUSDT&period=4h&limit=1
+2025-10-08 21:03:41 | WARNING | ⚠️ No real data collected — switching to DEMO rows.
+2025-10-08 21:03:41 | INFO | ✅ CSV saved: data/high_level_20251008_210341.csv
+2025-10-08 21:03:41 | INFO | ✅ CSV saved (latest): data/latest.csv
+2025-10-08 21:03:41 | INFO | ✅ Completed. Rows: 3
+2025-10-08 21:03:41 | INFO | 
+       timestamp_utc symbol  price_last  pct_change total_quote_5m  max_trade_usd  whale_detected whale_side  orderbook_sweep  sweep_depth_usd  coinglass_liq_buy_usd  coinglass_liq_sell_usd  oi_change_pct  funding_rate  signal_score signal_label  taker_delta_interval  taker_delta_alert_interval                            run_file
+2025-10-08T21:03:41Z    BTC    100000.0         0.8           None         250000            True        buy             True           120000                 300000                   50000            2.1         0.010           8.0       strong                  0.35                        True data/high_level_20251008_210341.csv
+2025-10-08T21:03:41Z    ETH      4000.0        -0.6           None          50000            True       sell            False           500000                      0                       0           -1.0        -0.005           1.0         weak                 -0.10                       False data/high_level_20251008_210341.csv
+2025-10-08T21:03:41Z    BNB       650.0         0.2           None         120000            True       sell             True            80000                  10000                  250000            0.5         0.000           8.0       strong                  0.05                       False data/high_level_20251008_210341.csv
