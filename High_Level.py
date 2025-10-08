@@ -3,17 +3,24 @@
 High_Level — LBank whale monitor (Trades + Orderbook Sweep + Coinglass + Scoring)
 
 Pipeline:
-  1) Collector: recent trades (LBank), orderbook snapshot (LBank), futures metrics (Coinglass - optional)
-  2) Analyzer:
-        - detect_large_trades
-        - detect_orderbook_sweep
-        - coinglass_signal
-  3) Scoring & Label
-  4) Save CSV -> data/high_level_YYYYMMDD_HHMMSS.csv  AND  data/latest.csv
+  1) Collector: recent trades (LBank), orderbook snapshot (LBank), futures metrics (Coinglass optional)
+  2) Analyzer: detect_large_trades, detect_orderbook_sweep, coinglass_signal
+  3) Taker Delta (interval 4h by default) from CoinGlass; fallback to Binance; fallback to DEMO
+  4) Score & Label
+  5) Save CSV -> data/high_level_YYYYMMDD_HHMMSS.csv AND data/latest.csv
 
-Notes:
-  - If real APIs are unavailable, script falls back to DEMO mode and generates synthetic data so CI artifacts are never empty.
-  - Configure via environment variables (see CONFIG section).
+Config (env):
+  HL_SYMBOLS=BTC,ETH,BNB
+  COINGLASS_API_KEY=<your key>    # optional; if missing we use fallback/demo
+  HL_TAKER_INTERVAL=4h            # default 4h for free plans
+  HL_TAKER_ALERT=0.30             # alert threshold on |delta| (0..1), default 0.30
+  HL_TRADE_USD_MIN=100000
+  HL_SWEEP_DEPTH_USD=150000
+  HL_COINGLASS_LIQ_MIN=200000
+  HL_W_LARGE_TRADE=2 HL_W_SWEEP=2 HL_W_LIQ=2 HL_W_OI=1 HL_W_PCT=1
+  HL_LABEL_STRONG=5 HL_LABEL_PROBABLE=3
+  HL_LOOKBACK_MIN=10
+  HL_FORCE_DEMO=false
 """
 
 import os
@@ -66,7 +73,6 @@ if _HAS_LOGURU:
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | {message}",
     )
 else:
-    # stdlib logging with rotation
     import logging
     from logging.handlers import RotatingFileHandler
     logger.setLevel(logging.INFO)
@@ -105,40 +111,30 @@ def getenv_bool(name: str, default: bool) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "y", "on")
 
 CONFIG = {
-    # Symbols (comma-separated, like "BTC,ETH,BNB"). Default a few majors.
     "SYMBOLS": [s.strip().upper() for s in os.getenv("HL_SYMBOLS", "BTC,ETH,BNB").split(",") if s.strip()],
-
-    # LBank base URL (public)
     "LBANK_BASE": os.getenv("HL_LBANK_BASE", "https://api.lbkex.com"),
-
-    # Coinglass (optional)
     "COINGLASS_KEY": os.getenv("COINGLASS_API_KEY", "").strip(),
-    "COINGLASS_BASE": os.getenv("COINGLASS_BASE", "https://open-api.coinglass.com/public/v2"),
-
-    # Thresholds
-    "TRADE_USD_MIN": getenv_float("HL_TRADE_USD_MIN", 100_000.0),   # large trade threshold
-    "SWEEP_DEPTH_USD": getenv_float("HL_SWEEP_DEPTH_USD", 150_000.0), # orderbook consumed depth threshold
+    "COINGLASS_BASE": os.getenv("COINGLASS_BASE", "https://open-api-v4.coinglass.com"),
+    "TRADE_USD_MIN": getenv_float("HL_TRADE_USD_MIN", 100_000.0),
+    "SWEEP_DEPTH_USD": getenv_float("HL_SWEEP_DEPTH_USD", 150_000.0),
     "COINGLASS_LIQ_MIN": getenv_float("HL_COINGLASS_LIQ_MIN", 200_000.0),
-
-    # Weights for scoring
     "W_LARGE_TRADE": getenv_float("HL_W_LARGE_TRADE", 2.0),
     "W_SWEEP": getenv_float("HL_W_SWEEP", 2.0),
     "W_LIQ": getenv_float("HL_W_LIQ", 2.0),
     "W_OI": getenv_float("HL_W_OI", 1.0),
     "W_PCT": getenv_float("HL_W_PCT", 1.0),
-
-    # Label thresholds
     "LABEL_STRONG": getenv_float("HL_LABEL_STRONG", 5.0),
     "LABEL_PROBABLE": getenv_float("HL_LABEL_PROBABLE", 3.0),
-
-    # Max lookback minutes for recent trades (for demo/real)
     "LOOKBACK_MIN": getenv_int("HL_LOOKBACK_MIN", 10),
-
-    # Demo mode force (optional). If True, skip external calls.
     "FORCE_DEMO": getenv_bool("HL_FORCE_DEMO", False),
+    # NEW: free-friendly taker settings
+    "TAKER_INTERVAL": os.getenv("HL_TAKER_INTERVAL", "4h"),
+    "TAKER_ALERT": getenv_float("HL_TAKER_ALERT", 0.30),
 }
-
-logger.info(f"📌 CONFIG: {json.dumps({k: (v if k!='COINGLASS_KEY' else '***' if v else '') for k,v in CONFIG.items()}, ensure_ascii=False)}")
+logger.info(
+    "📌 CONFIG: " +
+    json.dumps({k: (v if k != "COINGLASS_KEY" else ("***" if v else "")) for k, v in CONFIG.items()}, ensure_ascii=False)
+)
 
 # ----------------------------
 # Helpers
@@ -156,25 +152,17 @@ def safe_request_json(method: str, url: str, headers=None, params=None, timeout=
         return None
 
 # ----------------------------
-# Collector
+# Collector (LBank — best effort, optional)
 # ----------------------------
 def collect_recent_trades_lbank(symbol: str, lookback_min: int) -> List[dict]:
-    """
-    Collect recent trades for symbol from LBank.
-    NOTE: Public endpoint specifics may vary; in DEMO or on failure returns [].
-    """
     if CONFIG["FORCE_DEMO"]:
         return []
-
     base = CONFIG["LBANK_BASE"].rstrip("/")
-    # Placeholder endpoint; adjust to actual LBank recent trades if needed
-    # Many exchanges use /api/v1/trades?symbol=BTC_USDT like pairing. We'll try a common pattern.
     pair = f"{symbol}_USDT"
-    # Example guess (adjust to real if available in your env):
     url_candidates = [
-        f"{base}/v2/trades.do",               # old style on some exchanges
-        f"{base}/api/v2/trades",              # generic guess
-        f"{base}/api/v1/trades",              # generic guess
+        f"{base}/v2/trades.do",
+        f"{base}/api/v2/trades",
+        f"{base}/api/v1/trades",
     ]
     params = {"symbol": pair, "size": 200}
     since_ts_ms = int((datetime.utcnow() - timedelta(minutes=lookback_min)).timestamp() * 1000)
@@ -183,13 +171,10 @@ def collect_recent_trades_lbank(symbol: str, lookback_min: int) -> List[dict]:
         data = safe_request_json("GET", url, params=params)
         if not data:
             continue
-        # Normalize a few common shapes; if it doesn't match, skip
         trades = []
-        # Try a generic interpretation
         items = data.get("data") if isinstance(data, dict) else data
         if isinstance(items, list):
             for it in items:
-                # Try typical keys: price, amount, side, time
                 price = float(it.get("price", 0.0))
                 qty = float(it.get("amount", it.get("qty", 0.0)))
                 side = str(it.get("type", it.get("side", ""))).lower()
@@ -201,14 +186,10 @@ def collect_recent_trades_lbank(symbol: str, lookback_min: int) -> List[dict]:
             logger.info(f"✔️ LBank trades fetched for {symbol}: {len(trades)}")
             return trades
 
-    logger.warning(f"No trades fetched for {symbol} (falling back).")
+    logger.warning(f"No trades fetched for {symbol} (LBank).")
     return []
 
 def collect_orderbook_lbank(symbol: str) -> dict:
-    """
-    Collect orderbook snapshot for symbol from LBank (bids/asks with price, amount).
-    DEMO or failure -> {}.
-    """
     if CONFIG["FORCE_DEMO"]:
         return {}
     base = CONFIG["LBANK_BASE"].rstrip("/")
@@ -224,12 +205,10 @@ def collect_orderbook_lbank(symbol: str) -> dict:
         data = safe_request_json("GET", url, params=params)
         if not data:
             continue
-        ob = {}
         d = data.get("data") if isinstance(data, dict) else data
         if isinstance(d, dict):
             bids = d.get("bids", [])
             asks = d.get("asks", [])
-            # Normalize to list of [price, amount]
             def _norm(x):
                 out = []
                 for i in x:
@@ -240,33 +219,20 @@ def collect_orderbook_lbank(symbol: str) -> dict:
                 return out
             ob = {"bids": _norm(bids), "asks": _norm(asks)}
             if ob["bids"] or ob["asks"]:
-                logger.info(f"✔️ LBank orderbook fetched for {symbol}: bids={len(ob['bids'])}, asks={len(ob['asks'])}")
+                logger.info(f"✔️ LBank orderbook {symbol}: bids={len(ob['bids'])}, asks={len(ob['asks'])}")
                 return ob
 
-    logger.warning(f"No orderbook fetched for {symbol}.")
+    logger.warning(f"No orderbook fetched for {symbol} (LBank).")
     return {}
 
 def collect_coinglass_metrics(symbol: str) -> dict:
-    """
-    Optionally fetch futures metrics (liquidations/oi/funding) for symbol from Coinglass.
-    If no API key, returns empty dict.
-    """
+    # Optional stub: leave empty if not needed; filled for completeness
     if not CONFIG["COINGLASS_KEY"] or CONFIG["FORCE_DEMO"]:
         return {}
-    headers = {"coinglassSecret": CONFIG["COINGLASS_KEY"]}
+    headers = {"CG-API-KEY": CONFIG["COINGLASS_KEY"], "accept": "application/json"}
     base = CONFIG["COINGLASS_BASE"].rstrip("/")
     out = {}
-
-    # Liquidations example endpoint guess (public v2 varies)
-    # Try/skip gracefully
-    liq_url = f"{base}/liquidation_history"  # placeholder path
-    q = {"symbol": symbol, "interval": "5m"}
-    data = safe_request_json("GET", liq_url, headers=headers, params=q)
-    if data and isinstance(data, dict):
-        out["liq_buy_usd"] = float(data.get("liq_buy_usd", 0.0))
-        out["liq_sell_usd"] = float(data.get("liq_sell_usd", 0.0))
-
-    # OI/Funding placeholders
+    # Placeholder; adapt with your accessible endpoints if desired
     out.setdefault("oi_change_pct", 0.0)
     out.setdefault("funding_rate", 0.0)
     return out
@@ -275,9 +241,6 @@ def collect_coinglass_metrics(symbol: str) -> dict:
 # Analyzer
 # ----------------------------
 def detect_large_trades(trades: List[dict], price_hint: Optional[float], min_usd: float) -> Tuple[bool, float, str]:
-    """
-    Return: (found, max_trade_usd, side_of_max)
-    """
     found = False
     max_usd = 0.0
     max_side = ""
@@ -294,31 +257,19 @@ def detect_large_trades(trades: List[dict], price_hint: Optional[float], min_usd
     return found, max_usd, max_side
 
 def detect_orderbook_sweep(orderbook: dict, sweep_depth_usd: float, price_hint: Optional[float]) -> Tuple[bool, float]:
-    """
-    A simple sweep heuristic: if cumulative size in top N levels exceeds sweep_depth_usd worth,
-    we consider that 'consumed' by an aggressive taker recently.
-    Since we only have a snapshot, we'll just measure depth; in real-time you'd compare before/after.
-    """
     if not orderbook:
         return (False, 0.0)
     bids = orderbook.get("bids", [])[:15]
     asks = orderbook.get("asks", [])[:15]
-    # Approx: take mid as price hint
     last_price = price_hint or (bids[0][0] if bids else (asks[0][0] if asks else 0.0))
-    # USD depth (quote)
     bid_usd = sum(p * q for p, q in bids)
     ask_usd = sum(p * q for p, q in asks)
-    # If either side depth is small (as if got swept), flag sweep.
-    # For lack of two snapshots, interpret "very low depth" relative threshold.
-    low_depth_threshold = sweep_depth_usd  # configurable
+    low_depth_threshold = sweep_depth_usd
     swept = (bid_usd <= low_depth_threshold) or (ask_usd <= low_depth_threshold)
     swept_depth = min(bid_usd, ask_usd)
     return (swept, swept_depth)
 
 def coinglass_signal(m: dict, liq_min: float) -> Tuple[bool, float, float, float, float]:
-    """
-    Return: (has_liq_spike, liq_buy_usd, liq_sell_usd, oi_change_pct, funding_rate)
-    """
     if not m:
         return (False, 0.0, 0.0, 0.0, 0.0)
     liq_buy = float(m.get("liq_buy_usd", 0.0))
@@ -334,9 +285,6 @@ def fuse_score(
     cg_sig: Tuple[bool, float, float, float, float],
     pct_change: float
 ) -> Tuple[float, str, str]:
-    """
-    Combine into a score and label; also infer whale_side.
-    """
     (lt_found, lt_max_usd, lt_side) = large_trade
     (sw_found, sw_depth) = sweep
     (liq_spike, liq_buy, liq_sell, oi_change, funding) = cg_sig
@@ -362,19 +310,94 @@ def fuse_score(
     else:
         label = "neutral"
 
-    # Whale side heuristic:
-    # - If large trade side known, use it
-    # - Else if liq_buy >> liq_sell => buy, vice versa sell
-    # - Else use sign of pct_change
-    side = ""
     if lt_side in ("buy", "sell"):
         side = lt_side
     elif liq_spike:
         side = "buy" if liq_buy >= liq_sell else "sell"
     else:
         side = "buy" if pct_change > 0 else ("sell" if pct_change < 0 else "")
-
     return score, label, side
+
+# ----------------------------
+# CoinGlass taker (4h by default) + Binance fallback
+# ----------------------------
+COINGLASS_API_KEY = CONFIG["COINGLASS_KEY"]
+
+def fetch_coinglass_taker_interval(symbol_pair: str, interval: Optional[str] = None) -> Optional[dict]:
+    """
+    Try CoinGlass futures taker buy/sell for pair like 'BTCUSDT' with given interval (default from CONFIG['TAKER_INTERVAL']).
+    Returns {'buyVol': float, 'sellVol': float, 'timestamp': int} or None.
+    Designed for free/low plans: default interval '4h'.
+    """
+    if not COINGLASS_API_KEY:
+        logger.info("CoinGlass API key not set — skipping CoinGlass taker fetch.")
+        return None
+
+    interval = interval or CONFIG.get("TAKER_INTERVAL", "4h")
+    headers = {"CG-API-KEY": COINGLASS_API_KEY, "accept": "application/json"}
+    base = CONFIG["COINGLASS_BASE"].rstrip("/")
+
+    endpoints = [
+        f"{base}/api/futures/v2/taker-buy-sell-volume/history",
+        f"{base}/api/futures/aggregated-taker-buy-sell-volume/history",
+        f"{base}/api/futures/taker-buy-sell-volume/history",
+    ]
+    params_variants = [
+        {"pair": symbol_pair, "interval": interval},
+        {"symbol": symbol_pair, "interval": interval},
+        {"coin": symbol_pair.replace("USDT", ""), "interval": interval},
+    ]
+
+    for url in endpoints:
+        for params in params_variants:
+            data = safe_request_json("GET", url, headers=headers, params=params, timeout=20)
+            if not data:
+                continue
+            items = data.get("data") if isinstance(data, dict) and "data" in data else data
+            if isinstance(items, list) and len(items) > 0:
+                last = items[-1]
+                buy = float(last.get("buyVol") or last.get("buy_volume") or last.get("long") or 0.0)
+                sell = float(last.get("sellVol") or last.get("sell_volume") or last.get("short") or 0.0)
+                ts = int(last.get("timestamp") or last.get("time") or last.get("t") or 0)
+                logger.info(f"CoinGlass taker {symbol_pair} {interval}: buy={buy}, sell={sell}")
+                return {"buyVol": buy, "sellVol": sell, "timestamp": ts}
+
+    logger.warning("CoinGlass taker fetch returned no usable data (check key/plan/interval).")
+    return None
+
+def compute_taker_delta_with_fallback(symbol_short: str, interval: Optional[str] = None) -> Optional[float]:
+    """
+    Returns taker delta in [-1,+1] using CoinGlass (preferred, interval from CONFIG; default 4h),
+    else fallback to Binance USDⓈ-M endpoint (public), else None.
+    """
+    interval = interval or CONFIG.get("TAKER_INTERVAL", "4h")
+    pair = f"{symbol_short}USDT"
+
+    # CoinGlass first
+    try:
+        cg = fetch_coinglass_taker_interval(pair, interval=interval)
+        if cg:
+            buy, sell = cg["buyVol"], cg["sellVol"]
+            denom = buy + sell
+            return 0.0 if denom <= 0 else (buy - sell) / denom
+    except Exception as e:
+        logger.debug(f"CoinGlass delta error: {e}")
+
+    # Binance fallback
+    try:
+        url = "https://fapi.binance.com/futures/data/takerBuySellVol"
+        params = {"symbol": pair, "period": interval, "limit": 1}
+        data = safe_request_json("GET", url, params=params, timeout=15)
+        if data and isinstance(data, list) and len(data) > 0:
+            last = data[-1]
+            buy = float(last.get("buyVol", 0.0))
+            sell = float(last.get("sellVol", 0.0))
+            denom = buy + sell
+            return 0.0 if denom <= 0 else (buy - sell) / denom
+    except Exception as e:
+        logger.debug(f"Binance fallback delta error: {e}")
+
+    return None
 
 # ----------------------------
 # CSV Saving
@@ -390,30 +413,31 @@ def save_output_csv(df: pd.DataFrame) -> str:
     return str(out_path)
 
 # ----------------------------
-# Demo data (fallback)
+# Demo rows (fallback)
 # ----------------------------
 def build_demo_rows(symbols: List[str]) -> List[dict]:
     rows = []
     now = now_utc_iso()
     demo = {
-        "BTC": dict(price=100000.0, pct=+0.8, lt=True, lt_max=250_000, lt_side="buy", sw=True, sw_depth=120_000, liq_b=300_000, liq_s=50_000, oi=+2.1, fund=0.01),
-        "ETH": dict(price=4000.0, pct=-0.6, lt=False, lt_max=50_000,  lt_side="",     sw=False, sw_depth=500_000, liq_b=0,       liq_s=0,      oi=-1.0, fund=-0.005),
-        "BNB": dict(price=650.0,  pct=+0.2, lt=True, lt_max=120_000, lt_side="sell", sw=True, sw_depth=80_000,  liq_b=10_000,  liq_s=250_000, oi=+0.5, fund=0.0),
+        "BTC": dict(price=100000.0, pct=+0.8, lt=True, lt_max=250_000, lt_side="buy", sw=True, sw_depth=120_000, liq_b=300_000, liq_s=50_000, oi=+2.1, fund=0.01, delta=+0.35),
+        "ETH": dict(price=4000.0,   pct=-0.6, lt=False, lt_max=50_000,  lt_side="",     sw=False, sw_depth=500_000, liq_b=0,       liq_s=0,      oi=-1.0, fund=-0.005, delta=-0.10),
+        "BNB": dict(price=650.0,    pct=+0.2, lt=True, lt_max=120_000, lt_side="sell", sw=True, sw_depth=80_000,  liq_b=10_000,  liq_s=250_000, oi=+0.5, fund=0.0,   delta=+0.05),
     }
     for s in symbols:
-        d = demo.get(s, dict(price=1.0, pct=0.0, lt=False, lt_max=0, lt_side="", sw=False, sw_depth=999999, liq_b=0, liq_s=0, oi=0.0, fund=0.0))
+        d = demo.get(s, dict(price=1.0, pct=0.0, lt=False, lt_max=0, lt_side="", sw=False, sw_depth=999999, liq_b=0, liq_s=0, oi=0.0, fund=0.0, delta=0.0))
         lt_tuple = (d["lt"], float(d["lt_max"]), d["lt_side"])
         sw_tuple = (d["sw"], float(d["sw_depth"]))
-        cg_tuple = ( (d["liq_b"]>=CONFIG["COINGLASS_LIQ_MIN"]) or (d["liq_s"]>=CONFIG["COINGLASS_LIQ_MIN"]), float(d["liq_b"]), float(d["liq_s"]), float(d["oi"]), float(d["fund"]) )
+        cg_tuple = ((d["liq_b"] >= CONFIG["COINGLASS_LIQ_MIN"]) or (d["liq_s"] >= CONFIG["COINGLASS_LIQ_MIN"]),
+                    float(d["liq_b"]), float(d["liq_s"]), float(d["oi"]), float(d["fund"]))
         score, label, side = fuse_score(lt_tuple, sw_tuple, cg_tuple, d["pct"])
         rows.append({
             "timestamp_utc": now,
             "symbol": s,
             "price_last": d["price"],
             "pct_change": d["pct"],
-            "total_quote_5m": None,   # not available in demo
+            "total_quote_5m": None,
             "max_trade_usd": d["lt_max"],
-            "whale_detected": (label in ("strong","probable","weak")),
+            "whale_detected": (label in ("strong", "probable", "weak")),
             "whale_side": side,
             "orderbook_sweep": d["sw"],
             "sweep_depth_usd": d["sw_depth"],
@@ -423,7 +447,9 @@ def build_demo_rows(symbols: List[str]) -> List[dict]:
             "funding_rate": d["fund"],
             "signal_score": score,
             "signal_label": label,
-            "run_file": "",  # filled in after save
+            "taker_delta_interval": d["delta"],
+            "taker_delta_alert_interval": abs(d["delta"]) >= CONFIG["TAKER_ALERT"],
+            "run_file": "",
         })
     return rows
 
@@ -435,31 +461,25 @@ def run_pipeline(symbols: List[str]) -> pd.DataFrame:
     lookback = CONFIG["LOOKBACK_MIN"]
     for sym in symbols:
         try:
-            # Collect
             trades = collect_recent_trades_lbank(sym, lookback)
             orderbook = collect_orderbook_lbank(sym)
             cg = collect_coinglass_metrics(sym)
 
-            # Price hint (from trades or orderbook mid)
             price_hint = None
             if trades:
                 price_hint = float(trades[-1]["price"])
             elif orderbook.get("bids") or orderbook.get("asks"):
-                best_bid = orderbook.get("bids", [[0,0]])[0][0] if orderbook.get("bids") else 0.0
-                best_ask = orderbook.get("asks", [[0,0]])[0][0] if orderbook.get("asks") else 0.0
+                best_bid = orderbook.get("bids", [[0, 0]])[0][0] if orderbook.get("bids") else 0.0
+                best_ask = orderbook.get("asks", [[0, 0]])[0][0] if orderbook.get("asks") else 0.0
                 price_hint = (best_bid + best_ask) / 2.0 if (best_bid and best_ask) else (best_bid or best_ask or None)
 
-            # Analyzer
             large_trade = detect_large_trades(trades, price_hint, CONFIG["TRADE_USD_MIN"])
             sweep = detect_orderbook_sweep(orderbook, CONFIG["SWEEP_DEPTH_USD"], price_hint)
             cg_sig = coinglass_signal(cg, CONFIG["COINGLASS_LIQ_MIN"])
 
-            # Quick pct change placeholder (without historical price, we set 0)
-            pct_change = 0.0
-
+            pct_change = 0.0  # placeholder without OHLC history
             score, label, side = fuse_score(large_trade, sweep, cg_sig, pct_change)
 
-            # total_quote_5m (if we had per-trade timestamps we could sum last 5m quote)
             total_quote_5m = 0.0
             if trades:
                 now_ms = int(datetime.utcnow().timestamp() * 1000)
@@ -468,6 +488,12 @@ def run_pipeline(symbols: List[str]) -> pd.DataFrame:
                     if t["ts"] and (now_ms - t["ts"] <= five_min_ms):
                         px = t["price"] or (price_hint or 0.0)
                         total_quote_5m += abs(px * t["qty"])
+
+            # taker delta (4h default) via CoinGlass with Binance fallback
+            try:
+                delta = compute_taker_delta_with_fallback(sym, interval=CONFIG["TAKER_INTERVAL"])
+            except Exception:
+                delta = None
 
             row = {
                 "timestamp_utc": now_utc_iso(),
@@ -486,16 +512,25 @@ def run_pipeline(symbols: List[str]) -> pd.DataFrame:
                 "funding_rate": float(cg_sig[4]),
                 "signal_score": float(score),
                 "signal_label": str(label),
-                "run_file": "",  # fill later
+                "taker_delta_interval": delta,
+                "taker_delta_alert_interval": (abs(delta) >= CONFIG["TAKER_ALERT"]) if (delta is not None) else False,
+                "run_file": "",
             }
+
+            if row["taker_delta_alert_interval"]:
+                logger.info(f"⚠️ TAKER delta ALERT ({CONFIG['TAKER_INTERVAL']}) for {sym}: {delta:.2%}")
+
             rows.append(row)
 
         except Exception as e:
             logger.error(f"Symbol {sym} pipeline error: {e}")
             logger.debug(traceback.format_exc())
 
-    # If nothing meaningful collected (e.g., API paths invalid), generate DEMO rows
-    if not rows or all((r["price_last"] == 0.0 and not r["orderbook_sweep"] and r["max_trade_usd"] == 0.0) for r in rows):
+    # DEMO fallback if nothing meaningful
+    if not rows or all(
+        (r["price_last"] == 0.0 and not r["orderbook_sweep"] and r["max_trade_usd"] == 0.0 and r["taker_delta_interval"] in (None, 0.0))
+        for r in rows
+    ):
         logger.warning("⚠️ No real data collected — switching to DEMO rows.")
         rows = build_demo_rows(symbols)
 
@@ -508,9 +543,7 @@ def main() -> int:
         logger.info(f"🧪 Symbols: {symbols}")
         df = run_pipeline(symbols)
         out_path = save_output_csv(df)
-        # set run_file column
         df["run_file"] = out_path
-        # overwrite latest with updated column
         df.to_csv(DATA_DIR / "latest.csv", index=False)
         logger.info(f"✅ Completed. Rows: {len(df)}")
         logger.info("\n" + df.head(min(10, len(df))).to_string(index=False))
@@ -518,7 +551,6 @@ def main() -> int:
     except Exception as e:
         logger.error(f"❌ Fatal: {e}")
         logger.debug(traceback.format_exc())
-        # Write a minimal CSV to keep pipeline artifacts non-empty
         try:
             df = pd.DataFrame([{
                 "timestamp_utc": now_utc_iso(),
@@ -537,14 +569,16 @@ def main() -> int:
                 "funding_rate": 0.0,
                 "signal_score": 0.0,
                 "signal_label": "neutral",
+                "taker_delta_interval": None,
+                "taker_delta_alert_interval": False,
                 "run_file": "",
             }])
             save_output_csv(df)
-        except Exception as _:
+        except Exception:
             pass
         return 1
 
 if __name__ == "__main__":
-    exit_code = main()
-    print(f"Exit code: {exit_code}")
-    raise SystemExit(exit_code)
+    code = main()
+    print(f"Exit code: {code}")
+    raise SystemExit(code)
