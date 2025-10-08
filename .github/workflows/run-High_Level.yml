@@ -1,59 +1,105 @@
 name: High_Level Whale Monitor (LBank) - Full Pipeline
-python -u High_Level.py 2>&1 | tee run_script_output.log
-echo $? > run_exit_code.txt
 
+on:
+  # اجرای دستی
+  workflow_dispatch:
+  # نمونه‌ی زمان‌بندی (UTC) — هر 5 دقیقه
+  schedule:
+    - cron: "*/5 * * * *"
 
-- name: Upload run log (always)
-if: always()
-uses: actions/upload-artifact@v4
-with:
-name: high-level-run-log
-path: run_script_output.log
-retention-days: 7
+# برای push کردن لازم است
+permissions:
+  contents: write
 
+concurrency:
+  group: high-level-pipeline
+  cancel-in-progress: false
 
-- name: Show exit code (always)
-if: always()
-run: |
-echo "=== run exit code ==="
-cat run_exit_code.txt || true
+jobs:
+  run:
+    runs-on: ubuntu-latest
 
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-- name: Debug: list data and preview CSVs (always)
-if: always()
-run: |
-echo "=== data folder listing ==="
-ls -la data || true
-for f in data/*; do
-[ -e "$f" ] || continue
-echo "---- FILE: $f ----"
-head -n 50 "$f" || true
-echo
-done
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install pandas requests loguru
+          fi
 
-- name: Upload data folder (always)
-if: always()
-uses: actions/upload-artifact@v4
-with:
-name: high-level-data-folder
-path: data
-retention-days: 7
+      - name: Ensure folders exist
+        run: |
+          mkdir -p data logs
 
+      - name: Run High_Level.py (tee to log)
+        shell: bash
+        run: |
+          set -o pipefail
+          python -u High_Level.py 2>&1 | tee run_script_output.log
+          echo "${PIPESTATUS[0]}" > run_exit_code.txt
 
-- name: Commit & push data + logs (safe)
-if: always()
-run: |
-git config --global user.name "github-actions[bot]"
-git config --global user.email "github-actions[bot]@users.noreply.github.com"
-git pull --rebase origin main || true
-git add -A data logs run_script_output.log run_exit_code.txt || true
-git commit -m "Update High_Level data & logs [skip ci]" || echo "No changes to commit"
-git push origin main || echo "Nothing to push or push failed"
+      # ===== artifacts & debugging (always) =====
 
+      - name: Upload run log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: high-level-run-log
+          path: run_script_output.log
+          retention-days: 7
+          if-no-files-found: warn
 
-# اگر بخواهی Job در صورت خطا Fail شود، این مرحله را فعال کن:
-# - name: Fail on non-zero exit
-# if: always()
-# run: |
-# test "$(cat run_exit_code.txt)" = "0" || { echo "❌ Script failed"; exit 1; }
+      - name: Show exit code (always)
+        if: always()
+        run: |
+          echo "=== run exit code ==="
+          cat run_exit_code.txt || true
+
+      - name: Debug: list data and preview CSVs (always)
+        if: always()
+        run: |
+          echo "=== data folder listing ==="
+          ls -la data || true
+          for f in data/*; do
+            [ -e "$f" ] || continue
+            echo "---- FILE: $f ----"
+            head -n 50 "$f" || true
+            echo
+          done
+
+      - name: Upload data folder (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: high-level-data-folder
+          path: data
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Commit & push data + logs (safe)
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add -A data logs run_script_output.log run_exit_code.txt || true
+          git commit -m "Update High_Level data & logs [skip ci]" || echo "No changes to commit"
+          git push origin main || echo "Nothing to push or push failed"
+
+      # اگر بخواهی Job در صورت خطا Fail شود، این مرحله را فعال کن:
+      # - name: Fail on non-zero exit
+      #   if: always()
+      #   run: |
+      #     test "$(cat run_exit_code.txt)" = "0" || { echo "❌ Script failed"; exit 1; }
