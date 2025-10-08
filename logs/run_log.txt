@@ -110,3 +110,22 @@
 2025-10-08T21:12:27Z    BTC         0.0         0.0           None            0.0            True        buy            False              0.0                    0.0                     0.0            0.0           0.0           0.0      neutral                  0.35                        True data/high_level_20251008_211227.csv
 2025-10-08T21:12:27Z    ETH         0.0         0.0           None            0.0            True       sell            False              0.0                    0.0                     0.0            0.0           0.0           0.0      neutral                 -0.10                       False data/high_level_20251008_211227.csv
 2025-10-08T21:12:27Z    BNB         0.0         0.0           None            0.0            True        buy            False              0.0                    0.0                     0.0            0.0           0.0           0.0      neutral                  0.05                       False data/high_level_20251008_211227.csv
+2025-10-08 21:19:48 | INFO | 🚀 High_Level started.
+2025-10-08 21:19:48 | INFO | 📌 CONFIG: {"SYMBOLS": [], "MAX_SYMBOLS": 400, "EXCLUDE_STABLES": true, "COINGLASS_KEY": "", "COINGLASS_BASE": "https://open-api-v4.coinglass.com", "TAKER_INTERVAL": "4h", "TAKER_ALERT": 0.3, "ENABLE_LBANK": false, "LBANK_BASE": "https://api.lbkex.com", "LOOKBACK_MIN": 10, "TRADE_USD_MIN": 100000.0, "SWEEP_DEPTH_USD": 150000.0, "COINGLASS_LIQ_MIN": 200000.0, "W_LARGE_TRADE": 2.0, "W_SWEEP": 2.0, "W_LIQ": 2.0, "W_OI": 1.0, "W_PCT": 1.0, "LABEL_STRONG": 5.0, "LABEL_PROBABLE": 3.0, "FORCE_DEMO": false}
+2025-10-08 21:19:48 | WARNING | HTTP error on https://fapi.binance.com/fapi/v1/exchangeInfo: 451 Client Error:  for url: https://fapi.binance.com/fapi/v1/exchangeInfo
+2025-10-08 21:19:48 | WARNING | HTTP error on https://api.binance.com/api/v3/exchangeInfo: 451 Client Error:  for url: https://api.binance.com/api/v3/exchangeInfo
+2025-10-08 21:19:48 | WARNING | Universe discovery failed — NO INTERNET or API blocked. Using last resort: BTC,ETH,BNB.
+2025-10-08 21:19:48 | INFO | 📄 Saved universe: data/universe.csv (3 symbols)
+2025-10-08 21:19:48 | INFO | 🧪 Universe size=3 | Interval=4h | Max=400
+2025-10-08 21:19:48 | WARNING | HTTP error on https://fapi.binance.com/futures/data/takerBuySellVol: 451 Client Error:  for url: https://fapi.binance.com/futures/data/takerBuySellVol?symbol=BTCUSDT&period=4h&limit=1
+2025-10-08 21:19:48 | WARNING | HTTP error on https://fapi.binance.com/futures/data/takerBuySellVol: 451 Client Error:  for url: https://fapi.binance.com/futures/data/takerBuySellVol?symbol=ETHUSDT&period=4h&limit=1
+2025-10-08 21:19:48 | WARNING | HTTP error on https://fapi.binance.com/futures/data/takerBuySellVol: 451 Client Error:  for url: https://fapi.binance.com/futures/data/takerBuySellVol?symbol=BNBUSDT&period=4h&limit=1
+2025-10-08 21:19:48 | WARNING | ⚠️ No real taker data — switching to DEMO for entire universe.
+2025-10-08 21:19:48 | INFO | ✅ CSV saved: data/high_level_20251008_211948.csv
+2025-10-08 21:19:48 | INFO | ✅ CSV saved (latest): data/latest.csv
+2025-10-08 21:19:48 | INFO | ✅ Completed. Rows: 3
+2025-10-08 21:19:48 | INFO | 
+       timestamp_utc symbol  taker_delta_interval  taker_delta_alert_interval                            run_file
+2025-10-08T21:19:48Z    BTC                  0.05                       False data/high_level_20251008_211948.csv
+2025-10-08T21:19:48Z    ETH                  0.05                       False data/high_level_20251008_211948.csv
+2025-10-08T21:19:48Z    BNB                 -0.05                       False data/high_level_20251008_211948.csv

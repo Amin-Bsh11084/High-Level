@@ -1,4 +1,4 @@
-timestamp_utc,symbol,price_last,pct_change,total_quote_5m,max_trade_usd,whale_detected,whale_side,orderbook_sweep,sweep_depth_usd,coinglass_liq_buy_usd,coinglass_liq_sell_usd,oi_change_pct,funding_rate,signal_score,signal_label,taker_delta_interval,taker_delta_alert_interval,run_file
-2025-10-08T21:12:27Z,BTC,0.0,0.0,,0.0,True,buy,False,0.0,0.0,0.0,0.0,0.0,0.0,neutral,0.35,True,data/high_level_20251008_211227.csv
-2025-10-08T21:12:27Z,ETH,0.0,0.0,,0.0,True,sell,False,0.0,0.0,0.0,0.0,0.0,0.0,neutral,-0.1,False,data/high_level_20251008_211227.csv
-2025-10-08T21:12:27Z,BNB,0.0,0.0,,0.0,True,buy,False,0.0,0.0,0.0,0.0,0.0,0.0,neutral,0.05,False,data/high_level_20251008_211227.csv
+timestamp_utc,symbol,taker_delta_interval,taker_delta_alert_interval,run_file
+2025-10-08T21:19:48Z,BTC,0.05,False,data/high_level_20251008_211948.csv
+2025-10-08T21:19:48Z,ETH,0.05,False,data/high_level_20251008_211948.csv
+2025-10-08T21:19:48Z,BNB,-0.05,False,data/high_level_20251008_211948.csv

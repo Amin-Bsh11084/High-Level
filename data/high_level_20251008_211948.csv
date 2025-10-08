@@ -1,0 +1,4 @@
+timestamp_utc,symbol,taker_delta_interval,taker_delta_alert_interval,run_file
+2025-10-08T21:19:48Z,BTC,0.05,False,
+2025-10-08T21:19:48Z,ETH,0.05,False,
+2025-10-08T21:19:48Z,BNB,-0.05,False,
