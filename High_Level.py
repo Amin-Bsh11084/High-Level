@@ -1,49 +1,15 @@
 # High_Level.py
 """
 High_Level — Market-wide taker delta scanner (CoinGlass 4h free-friendly) + Binance fallback
-Optional LBank (trades/depth) + Scoring. Saves CSV every run.
-
-Key features:
-  - Market universe discovery:
-      1) HL_SYMBOLS env (comma-separated bases like "BTC,ETH,SOL")
-      2) data/symbols.csv with column 'symbol'
-      3) Auto-fetch from Binance USDⓈ-M exchangeInfo (all USDT-margined futures bases)
-     Limit via HL_MAX_SYMBOLS (default 200).
-  - Taker delta from CoinGlass (interval 4h by default) — no paid upgrade needed.
-    Fallback to Binance takerBuySellVol. Final fallback: DEMO (so CSV is never empty).
-  - Optional LBank collectors (disabled by default for speed). Enable with HL_ENABLE_LBANK=true.
-  - Rotating logs, robust error handling, always writes:
-      data/high_level_YYYYMMDD_HHMMSS.csv  and  data/latest.csv
-
-Environment (set in GitHub Actions "Vars/Secrets" or locally):
-  # Universe
-  HL_SYMBOLS=            # optional (e.g., BTC,ETH,SOL)
-  HL_MAX_SYMBOLS=200     # cap the universe size
-  # CoinGlass
-  COINGLASS_API_KEY=     # optional; if empty we fallback to Binance/demo
-  HL_TAKER_INTERVAL=4h   # free-friendly default
-  HL_TAKER_ALERT=0.30    # alert when |delta| >= 0.30
-  # LBank & Scoring (optional)
-  HL_ENABLE_LBANK=false
-  HL_TRADE_USD_MIN=100000
-  HL_SWEEP_DEPTH_USD=150000
-  HL_COINGLASS_LIQ_MIN=200000
-  HL_W_LARGE_TRADE=2
-  HL_W_SWEEP=2
-  HL_W_LIQ=2
-  HL_W_OI=1
-  HL_W_PCT=1
-  HL_LABEL_STRONG=5
-  HL_LABEL_PROBABLE=3
-  HL_LOOKBACK_MIN=10
-  HL_FORCE_DEMO=false
+- یونیورس نمادها به‌صورت محکم از Binance (Futures USDT و در صورت لزوم Spot USDT) کشف می‌شود.
+- خروجی یونیورس در data/universe.csv ذخیره می‌شود تا قابل بررسی باشد.
+- اگر CoinGlass/Binance در دسترس نباشند، DEMO برای تمام یونیورس اجرا می‌شود (نه فقط 3 نماد).
+- CSV خروجی: data/high_level_YYYYMMDD_HHMMSS.csv و data/latest.csv
 """
 
 import os
 import json
-import math
 import time
-import csv
 import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -119,21 +85,23 @@ def getenv_bool(name: str, default: bool) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "y", "on")
 
 CONFIG = {
+    # Universe
     "SYMBOLS": [s.strip().upper() for s in os.getenv("HL_SYMBOLS", "").split(",") if s.strip()],
-    "MAX_SYMBOLS": getenv_int("HL_MAX_SYMBOLS", 200),
+    "MAX_SYMBOLS": getenv_int("HL_MAX_SYMBOLS", 400),     # سقف بزرگتر
+    "EXCLUDE_STABLES": getenv_bool("HL_EXCLUDE_STABLES", True),  # حذف استیبل‌کوین‌ها از یونیورس
 
-    # Free-friendly taker settings
+    # Taker (free-friendly)
     "COINGLASS_KEY": os.getenv("COINGLASS_API_KEY", "").strip(),
     "COINGLASS_BASE": os.getenv("COINGLASS_BASE", "https://open-api-v4.coinglass.com"),
     "TAKER_INTERVAL": os.getenv("HL_TAKER_INTERVAL", "4h"),
     "TAKER_ALERT": getenv_float("HL_TAKER_ALERT", 0.30),
 
-    # LBank (optional)
+    # Optional LBank (خاموش برای سرعت)
     "ENABLE_LBANK": getenv_bool("HL_ENABLE_LBANK", False),
     "LBANK_BASE": os.getenv("HL_LBANK_BASE", "https://api.lbkex.com"),
     "LOOKBACK_MIN": getenv_int("HL_LOOKBACK_MIN", 10),
 
-    # Scoring thresholds/weights
+    # Scoring (اختیاری)
     "TRADE_USD_MIN": getenv_float("HL_TRADE_USD_MIN", 100_000.0),
     "SWEEP_DEPTH_USD": getenv_float("HL_SWEEP_DEPTH_USD", 150_000.0),
     "COINGLASS_LIQ_MIN": getenv_float("HL_COINGLASS_LIQ_MIN", 200_000.0),
@@ -164,168 +132,102 @@ def safe_request_json(method: str, url: str, headers=None, params=None, timeout=
         logger.warning(f"HTTP error on {url}: {e}")
         return None
 
+def _filter_out_stables(bases: List[str]) -> List[str]:
+    if not CONFIG["EXCLUDE_STABLES"]:
+        return bases
+    # فهرست ساده‌ی استیبل‌های معروف؛ می‌تونی کامل‌ترش کنی
+    stables = {"USDT","USDC","FDUSD","TUSD","DAI","BUSD","PYUSD","USDD","EURS","EURT","USTC","GHO"}
+    return [b for b in bases if b not in stables]
+
 # ----------------------------
-# Universe discovery
+# Universe discovery (محکم + خروجی به CSV)
 # ----------------------------
+def _binance_futures_bases() -> List[str]:
+    info = safe_request_json("GET", "https://fapi.binance.com/fapi/v1/exchangeInfo")
+    bases = []
+    if info and isinstance(info, dict) and "symbols" in info:
+        for s in info["symbols"]:
+            if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT":
+                base = str(s.get("baseAsset","")).upper()
+                if base:
+                    bases.append(base)
+    return sorted(set(bases))
+
+def _binance_spot_bases() -> List[str]:
+    info = safe_request_json("GET", "https://api.binance.com/api/v3/exchangeInfo")
+    bases = []
+    if info and isinstance(info, dict) and "symbols" in info:
+        for s in info["symbols"]:
+            if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT":
+                base = str(s.get("baseAsset","")).upper()
+                if base:
+                    bases.append(base)
+    return sorted(set(bases))
+
 def load_universe() -> List[str]:
     """
-    Returns list of BASE symbols (e.g., BTC, ETH, SOL, ...).
-    Precedence: HL_SYMBOLS env > data/symbols.csv > Binance USDⓈ-M exchangeInfo (USDT-quote).
-    Limited to CONFIG['MAX_SYMBOLS'].
+    ترتیب کشف یونیورس:
+      1) HL_SYMBOLS (اگر ست شده)
+      2) data/symbols.csv (ستون 'symbol') — می‌تواند BASE یا BASEUSDT باشد
+      3) Binance Futures USDT bases (ترجیح)؛ اگر خالی، Binance Spot USDT
+    سپس حذف استیبل‌ها (اختیاری) و سقف HL_MAX_SYMBOLS اعمال می‌شود.
+    نتیجه در data/universe.csv ذخیره می‌شود.
     """
-    # 1) Explicit env list
+    # 1) از ENV
     if CONFIG["SYMBOLS"]:
-        bases = [s.strip().upper() for s in CONFIG["SYMBOLS"] if s.strip()]
-        logger.info(f"Universe from HL_SYMBOLS ({len(bases)}).")
-        return bases[: CONFIG["MAX_SYMBOLS"]]
-
-    # 2) Local CSV (data/symbols.csv with column 'symbol')
-    csv_path = DATA_DIR / "symbols.csv"
-    if csv_path.exists():
-        try:
-            df = pd.read_csv(csv_path)
-            if "symbol" in df.columns:
-                vals = [str(x).strip().upper() for x in df["symbol"].tolist() if str(x).strip()]
-                # Accept either BASE or BASEUSDT; normalize to BASE
-                bases = [v[:-4] if v.endswith("USDT") else v for v in vals]
-                bases = sorted(set(bases))
-                logger.info(f"Universe from data/symbols.csv ({len(bases)}).")
-                return bases[: CONFIG["MAX_SYMBOLS"]]
-        except Exception as e:
-            logger.warning(f"symbols.csv read failed: {e}")
-
-    # 3) Binance USDⓈ-M futures exchangeInfo
-    try:
-        info = safe_request_json("GET", "https://fapi.binance.com/fapi/v1/exchangeInfo")
-        bases = []
-        if info and isinstance(info, dict) and "symbols" in info:
-            for sym in info["symbols"]:
-                # Filter tradable USDT margined futures
-                if sym.get("status") == "TRADING" and sym.get("quoteAsset") == "USDT":
-                    base = sym.get("baseAsset", "").upper()
-                    if base:
-                        bases.append(base)
+        bases = [s[:-4] if s.endswith("USDT") else s for s in CONFIG["SYMBOLS"]]
         bases = sorted(set(bases))
-        logger.info(f"Universe from Binance futures (USDT): {len(bases)} bases.")
-        return bases[: CONFIG["MAX_SYMBOLS"]]
+        logger.info(f"Universe: from HL_SYMBOLS ({len(bases)})")
+    else:
+        # 2) از فایل محلی
+        csv_path = DATA_DIR / "symbols.csv"
+        if csv_path.exists():
+            try:
+                df = pd.read_csv(csv_path)
+                if "symbol" in df.columns:
+                    vals = [str(x).strip().upper() for x in df["symbol"].tolist() if str(x).strip()]
+                    bases = [v[:-4] if v.endswith("USDT") else v for v in vals]
+                    bases = sorted(set(bases))
+                    logger.info(f"Universe: from data/symbols.csv ({len(bases)})")
+                else:
+                    bases = []
+            except Exception as e:
+                logger.warning(f"symbols.csv read failed: {e}")
+                bases = []
+        else:
+            bases = []
+
+        # 3) اگر هنوز خالی بود: Binance Futures → Spot
+        if not bases:
+            f_bases = _binance_futures_bases()
+            if f_bases:
+                bases = f_bases
+                logger.info(f"Universe: from Binance Futures ({len(bases)})")
+            else:
+                s_bases = _binance_spot_bases()
+                if s_bases:
+                    bases = s_bases
+                    logger.info(f"Universe: from Binance Spot ({len(bases)})")
+
+        if not bases:
+            logger.warning("Universe discovery failed — NO INTERNET or API blocked. Using last resort: BTC,ETH,BNB.")
+            bases = ["BTC","ETH","BNB"]
+
+    # حذف استیبل‌ها و سقف
+    before = len(bases)
+    bases = _filter_out_stables(bases)
+    after = len(bases)
+    if after != before:
+        logger.info(f"Filtered stables: {before} -> {after}")
+
+    bases = bases[: CONFIG["MAX_SYMBOLS"]]
+    # ذخیره یونیورس
+    try:
+        pd.DataFrame({"symbol": bases}).to_csv(DATA_DIR / "universe.csv", index=False)
+        logger.info(f"📄 Saved universe: data/universe.csv ({len(bases)} symbols)")
     except Exception as e:
-        logger.error(f"Binance exchangeInfo failed: {e}")
-
-    # Fallback tiny set
-    logger.warning("Universe fallback to defaults [BTC,ETH,BNB].")
-    return ["BTC", "ETH", "BNB"][: CONFIG["MAX_SYMBOLS"]]
-
-# ----------------------------
-# Optional LBank (disabled by default)
-# ----------------------------
-def collect_recent_trades_lbank(symbol: str, lookback_min: int) -> List[dict]:
-    if CONFIG["FORCE_DEMO"] or not CONFIG["ENABLE_LBANK"]:
-        return []
-    base = CONFIG["LBANK_BASE"].rstrip("/")
-    pair = f"{symbol}_USDT"
-    urls = [f"{base}/v2/trades.do", f"{base}/api/v2/trades", f"{base}/api/v1/trades"]
-    params = {"symbol": pair, "size": 200}
-    since_ts = int((datetime.utcnow() - timedelta(minutes=lookback_min)).timestamp() * 1000)
-    for url in urls:
-        data = safe_request_json("GET", url, params=params)
-        if not data: 
-            continue
-        items = data.get("data") if isinstance(data, dict) else data
-        out = []
-        if isinstance(items, list):
-            for it in items:
-                try:
-                    price = float(it.get("price", 0.0))
-                    qty = float(it.get("amount", it.get("qty", 0.0)))
-                    side = str(it.get("type", it.get("side", ""))).lower()
-                    ts = int(it.get("time", it.get("ts", 0)))
-                    if ts and ts < since_ts: 
-                        continue
-                    out.append({"price": price, "qty": qty, "side": side, "ts": ts})
-                except Exception:
-                    continue
-        if out:
-            return out
-    return []
-
-def collect_orderbook_lbank(symbol: str) -> dict:
-    if CONFIG["FORCE_DEMO"] or not CONFIG["ENABLE_LBANK"]:
-        return {}
-    base = CONFIG["LBANK_BASE"].rstrip("/")
-    pair = f"{symbol}_USDT"
-    urls = [f"{base}/v2/depth.do", f"{base}/api/v2/depth", f"{base}/api/v1/depth"]
-    params = {"symbol": pair, "size": 60}
-    for url in urls:
-        data = safe_request_json("GET", url, params=params)
-        if not data:
-            continue
-        d = data.get("data") if isinstance(data, dict) else data
-        if isinstance(d, dict):
-            def _norm(x):
-                out = []
-                for i in x:
-                    if isinstance(i, list) and len(i) >= 2:
-                        out.append([float(i[0]), float(i[1])])
-                    elif isinstance(i, dict):
-                        out.append([float(i.get("price", 0)), float(i.get("amount", 0))])
-                return out
-            return {"bids": _norm(d.get("bids", [])), "asks": _norm(d.get("asks", []))}
-    return {}
-
-# ----------------------------
-# Scoring helpers (optional)
-# ----------------------------
-def detect_large_trades(trades: List[dict], price_hint: Optional[float], min_usd: float) -> Tuple[bool, float, str]:
-    found = False; max_usd = 0.0; max_side = ""
-    p = price_hint or (trades[0]["price"] if trades else 0.0)
-    for t in trades:
-        price = t["price"] or p
-        usd = abs(price * t["qty"])
-        side = (t.get("side") or "").lower()
-        if usd > max_usd:
-            max_usd, max_side = usd, side
-        if usd >= min_usd:
-            found = True
-    return found, max_usd, max_side
-
-def detect_orderbook_sweep(orderbook: dict, sweep_depth_usd: float, price_hint: Optional[float]) -> Tuple[bool, float]:
-    if not orderbook:
-        return (False, 0.0)
-    bids = orderbook.get("bids", [])[:15]; asks = orderbook.get("asks", [])[:15]
-    bid_usd = sum(p * q for p, q in bids); ask_usd = sum(p * q for p, q in asks)
-    swept = (bid_usd <= sweep_depth_usd) or (ask_usd <= sweep_depth_usd)
-    return (swept, min(bid_usd, ask_usd))
-
-def coinglass_signal(m: dict, liq_min: float) -> Tuple[bool, float, float, float, float]:
-    if not m:
-        return (False, 0.0, 0.0, 0.0, 0.0)
-    liq_buy = float(m.get("liq_buy_usd", 0.0))
-    liq_sell = float(m.get("liq_sell_usd", 0.0))
-    has_spike = (liq_buy >= liq_min) or (liq_sell >= liq_min)
-    oi_change = float(m.get("oi_change_pct", 0.0))
-    funding = float(m.get("funding_rate", 0.0))
-    return (has_spike, liq_buy, liq_sell, oi_change, funding)
-
-def fuse_score(lt, sw, cg_sig, pct_change: float) -> Tuple[float, str, str]:
-    (lt_found, lt_max_usd, lt_side) = lt
-    (sw_found, _) = sw
-    (liq_spike, liq_buy, liq_sell, oi_change, _) = cg_sig
-    score = 0.0
-    if lt_found: score += CONFIG["W_LARGE_TRADE"]
-    if sw_found: score += CONFIG["W_SWEEP"]
-    if liq_spike: score += CONFIG["W_LIQ"]
-    if abs(oi_change) > 0: score += CONFIG["W_OI"] * (1.0 if oi_change > 0 else 0.5)
-    if abs(pct_change) > 0: score += CONFIG["W_PCT"] * (1.0 if pct_change > 0 else 0.5)
-
-    if score >= CONFIG["LABEL_STRONG"]: label = "strong"
-    elif score >= CONFIG["LABEL_PROBABLE"]: label = "probable"
-    elif score > 0: label = "weak"
-    else: label = "neutral"
-
-    if lt_side in ("buy","sell"): side = lt_side
-    elif liq_spike: side = "buy" if liq_buy >= liq_sell else "sell"
-    else: side = ""
-    return score, label, side
+        logger.warning(f"Save universe.csv failed: {e}")
+    return bases
 
 # ----------------------------
 # CoinGlass taker (4h) + Binance fallback
@@ -365,7 +267,7 @@ def compute_taker_delta_with_fallback(base_symbol: str, interval: Optional[str]=
     interval = interval or CONFIG["TAKER_INTERVAL"]
     pair = f"{base_symbol}USDT"
 
-    # CoinGlass first
+    # 1) CoinGlass
     try:
         cg = fetch_coinglass_taker_interval(pair, interval=interval)
         if cg:
@@ -375,12 +277,12 @@ def compute_taker_delta_with_fallback(base_symbol: str, interval: Optional[str]=
     except Exception as e:
         logger.debug(f"CoinGlass delta error {base_symbol}: {e}")
 
-    # Binance fallback (public)
+    # 2) Binance fallback
     try:
         url = "https://fapi.binance.com/futures/data/takerBuySellVol"
         params = {"symbol": pair, "period": interval, "limit": 1}
         data = safe_request_json("GET", url, params=params, timeout=15)
-        if data and isinstance(data, list):
+        if data and isinstance(data, list) and len(data) > 0:
             last = data[-1]
             buy = float(last.get("buyVol", 0.0))
             sell = float(last.get("sellVol", 0.0))
@@ -389,7 +291,30 @@ def compute_taker_delta_with_fallback(base_symbol: str, interval: Optional[str]=
     except Exception as e:
         logger.debug(f"Binance fallback delta error {base_symbol}: {e}")
 
+    # 3) No data
     return None
+
+# ----------------------------
+# (اختیاری) LBank parts — خاموش برای سرعت
+# ----------------------------
+def collect_recent_trades_lbank(symbol: str, lookback_min: int) -> List[dict]:
+    return []  # intentionally disabled by default for speed
+
+def collect_orderbook_lbank(symbol: str) -> dict:
+    return {}
+
+def detect_large_trades(trades: List[dict], price_hint: Optional[float], min_usd: float) -> Tuple[bool, float, str]:
+    return (False, 0.0, "")
+
+def detect_orderbook_sweep(orderbook: dict, sweep_depth_usd: float, price_hint: Optional[float]) -> Tuple[bool, float]:
+    return (False, 0.0)
+
+def coinglass_signal(m: dict, liq_min: float) -> Tuple[bool, float, float, float, float]:
+    return (False, 0.0, 0.0, 0.0, 0.0)
+
+def fuse_score(lt, sw, cg_sig, pct_change: float) -> Tuple[float, str, str]:
+    # Minimal scoring off (we focus on taker delta). Keep API stable.
+    return (0.0, "neutral", "")
 
 # ----------------------------
 # CSV saving
@@ -405,30 +330,18 @@ def save_output_csv(df: pd.DataFrame) -> str:
     return str(out_path)
 
 # ----------------------------
-# Demo rows (fallback)
+# DEMO rows — برای تمام یونیورس
 # ----------------------------
 def build_demo_rows(symbols: List[str]) -> List[dict]:
-    rows = []
     now = now_utc_iso()
-    for i, s in enumerate(symbols[:10] or ["BTC","ETH","BNB"]):
-        delta = (0.35 if s=="BTC" else (-0.1 if s=="ETH" else 0.05))
+    rows = []
+    for i, s in enumerate(symbols):
+        # الگویی ساده برای پخش مثبت/منفی
+        sign = 1 if (i % 4 in (0,1)) else -1
+        delta = round(0.05 * sign, 4)  # 5% برای دمو
         rows.append({
             "timestamp_utc": now,
             "symbol": s,
-            "price_last": 0.0,
-            "pct_change": 0.0,
-            "total_quote_5m": None,
-            "max_trade_usd": 0.0,
-            "whale_detected": abs(delta) >= 0.05,
-            "whale_side": "buy" if delta>0 else ("sell" if delta<0 else ""),
-            "orderbook_sweep": False,
-            "sweep_depth_usd": 0.0,
-            "coinglass_liq_buy_usd": 0.0,
-            "coinglass_liq_sell_usd": 0.0,
-            "oi_change_pct": 0.0,
-            "funding_rate": 0.0,
-            "signal_score": 0.0,
-            "signal_label": "neutral",
             "taker_delta_interval": delta,
             "taker_delta_alert_interval": abs(delta) >= CONFIG["TAKER_ALERT"],
             "run_file": "",
@@ -436,79 +349,38 @@ def build_demo_rows(symbols: List[str]) -> List[dict]:
     return rows
 
 # ----------------------------
-# Main pipeline
+# Main
 # ----------------------------
 def run_pipeline() -> pd.DataFrame:
     bases = load_universe()
-    logger.info(f"🧪 Universe size = {len(bases)} (cap={CONFIG['MAX_SYMBOLS']}) | Interval={CONFIG['TAKER_INTERVAL']}")
+    logger.info(f"🧪 Universe size={len(bases)} | Interval={CONFIG['TAKER_INTERVAL']} | Max={CONFIG['MAX_SYMBOLS']}")
 
     rows: List[dict] = []
-    lookback = CONFIG["LOOKBACK_MIN"]
-
-    # For large universes, avoid hammering APIs too fast
-    throttle_every = 25
-    pause_sec = 0.7  # gentle
+    throttle_every = 30
+    pause_sec = 0.6
 
     for idx, sym in enumerate(bases, start=1):
         try:
-            # Optional LBank collectors (disabled by default)
-            trades = collect_recent_trades_lbank(sym, lookback) if CONFIG["ENABLE_LBANK"] else []
-            orderbook = collect_orderbook_lbank(sym) if CONFIG["ENABLE_LBANK"] else {}
-
-            price_hint = None
-            if trades:
-                price_hint = float(trades[-1]["price"])
-            elif orderbook.get("bids") or orderbook.get("asks"):
-                b0 = orderbook.get("bids", [[0,0]])[0][0] if orderbook.get("bids") else 0.0
-                a0 = orderbook.get("asks", [[0,0]])[0][0] if orderbook.get("asks") else 0.0
-                price_hint = (b0 + a0)/2.0 if (b0 and a0) else (b0 or a0 or None)
-
-            lt = detect_large_trades(trades, price_hint, CONFIG["TRADE_USD_MIN"]) if CONFIG["ENABLE_LBANK"] else (False, 0.0, "")
-            sw = detect_orderbook_sweep(orderbook, CONFIG["SWEEP_DEPTH_USD"], price_hint) if CONFIG["ENABLE_LBANK"] else (False, 0.0)
-            cg_sig = coinglass_signal({}, CONFIG["COINGLASS_LIQ_MIN"])  # stub metrics (not used here)
-            pct_change = 0.0
-            score, label, side = fuse_score(lt, sw, cg_sig, pct_change)
-
-            # taker delta via CoinGlass 4h (free) with Binance fallback
             delta = compute_taker_delta_with_fallback(sym, interval=CONFIG["TAKER_INTERVAL"])
             alert = (abs(delta) >= CONFIG["TAKER_ALERT"]) if (delta is not None) else False
             if alert:
                 logger.info(f"⚠️ ALERT {sym} Δ{CONFIG['TAKER_INTERVAL']}: {delta:.2%}")
-
-            row = {
+            rows.append({
                 "timestamp_utc": now_utc_iso(),
                 "symbol": sym,
-                "price_last": float(price_hint or 0.0),
-                "pct_change": pct_change,
-                "total_quote_5m": None,
-                "max_trade_usd": float(lt[1]) if lt else 0.0,
-                "whale_detected": (score > 0) or alert,
-                "whale_side": side if side else ("buy" if (delta or 0) > 0 else ("sell" if (delta or 0) < 0 else "")),
-                "orderbook_sweep": bool(sw[0]),
-                "sweep_depth_usd": float(sw[1]),
-                "coinglass_liq_buy_usd": 0.0,
-                "coinglass_liq_sell_usd": 0.0,
-                "oi_change_pct": 0.0,
-                "funding_rate": 0.0,
-                "signal_score": float(score),
-                "signal_label": str(label),
                 "taker_delta_interval": delta,
                 "taker_delta_alert_interval": alert,
                 "run_file": "",
-            }
-            rows.append(row)
-
-            # Throttle
+            })
             if idx % throttle_every == 0:
                 time.sleep(pause_sec)
-
         except Exception as e:
-            logger.error(f"[{sym}] pipeline error: {e}")
+            logger.error(f"[{sym}] error: {e}")
             logger.debug(traceback.format_exc())
 
-    # DEMO fallback if everything empty or None
+    # اگر هیچ دیتایی نگرفتیم، دمو برای کل یونیورس
     if not rows or all(r["taker_delta_interval"] is None for r in rows):
-        logger.warning("⚠️ No real taker data — switching to DEMO rows.")
+        logger.warning("⚠️ No real taker data — switching to DEMO for entire universe.")
         rows = build_demo_rows(bases)
 
     return pd.DataFrame(rows)
@@ -520,34 +392,20 @@ def main() -> int:
         df["run_file"] = out_path
         df.to_csv(DATA_DIR / "latest.csv", index=False)
         logger.info(f"✅ Completed. Rows: {len(df)}")
-        logger.info("\n" + df.head(min(15, len(df))).to_string(index=False))
+        logger.info("\n" + df.head(min(20, len(df))).to_string(index=False))
         return 0
     except Exception as e:
         logger.error(f"❌ Fatal: {e}")
         logger.debug(traceback.format_exc())
         try:
-            df = pd.DataFrame([{
+            # حداقل خروجی
+            pd.DataFrame([{
                 "timestamp_utc": now_utc_iso(),
                 "symbol": "N/A",
-                "price_last": 0.0,
-                "pct_change": 0.0,
-                "total_quote_5m": None,
-                "max_trade_usd": 0.0,
-                "whale_detected": False,
-                "whale_side": "",
-                "orderbook_sweep": False,
-                "sweep_depth_usd": 0.0,
-                "coinglass_liq_buy_usd": 0.0,
-                "coinglass_liq_sell_usd": 0.0,
-                "oi_change_pct": 0.0,
-                "funding_rate": 0.0,
-                "signal_score": 0.0,
-                "signal_label": "neutral",
                 "taker_delta_interval": None,
                 "taker_delta_alert_interval": False,
                 "run_file": "",
-            }])
-            save_output_csv(df)
+            }]).to_csv(DATA_DIR / "latest.csv", index=False)
         except Exception:
             pass
         return 1
