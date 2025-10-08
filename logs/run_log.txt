@@ -30,3 +30,33 @@
 2025-10-08T19:32:57Z    BTC    100000.0         0.8           None         250000            True        buy             True           120000                 300000                   50000            2.1         0.010           8.0       strong data/high_level_20251008_193257.csv
 2025-10-08T19:32:57Z    ETH      4000.0        -0.6           None          50000            True       sell            False           500000                      0                       0           -1.0        -0.005           1.0         weak data/high_level_20251008_193257.csv
 2025-10-08T19:32:57Z    BNB       650.0         0.2           None         120000            True       sell             True            80000                  10000                  250000            0.5         0.000           8.0       strong data/high_level_20251008_193257.csv
+2025-10-08 19:42:16 | INFO | 🚀 High_Level started (logging configured).
+2025-10-08 19:42:16 | INFO | 📌 CONFIG: {"SYMBOLS": ["BTC", "ETH", "BNB"], "LBANK_BASE": "https://api.lbkex.com", "COINGLASS_KEY": "", "COINGLASS_BASE": "https://open-api.coinglass.com/public/v2", "TRADE_USD_MIN": 100000.0, "SWEEP_DEPTH_USD": 150000.0, "COINGLASS_LIQ_MIN": 200000.0, "W_LARGE_TRADE": 2.0, "W_SWEEP": 2.0, "W_LIQ": 2.0, "W_OI": 1.0, "W_PCT": 1.0, "LABEL_STRONG": 5.0, "LABEL_PROBABLE": 3.0, "LOOKBACK_MIN": 10, "FORCE_DEMO": false}
+2025-10-08 19:42:16 | INFO | 🧪 Symbols: ['BTC', 'ETH', 'BNB']
+2025-10-08 19:42:18 | WARNING | HTTP error on https://api.lbkex.com/api/v2/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/trades?symbol=BTC_USDT&size=200
+2025-10-08 19:42:19 | WARNING | HTTP error on https://api.lbkex.com/api/v1/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/trades?symbol=BTC_USDT&size=200
+2025-10-08 19:42:19 | WARNING | No trades fetched for BTC (falling back).
+2025-10-08 19:42:20 | WARNING | HTTP error on https://api.lbkex.com/api/v2/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/depth?symbol=BTC_USDT&size=60
+2025-10-08 19:42:21 | WARNING | HTTP error on https://api.lbkex.com/api/v1/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/depth?symbol=BTC_USDT&size=60
+2025-10-08 19:42:21 | WARNING | No orderbook fetched for BTC.
+2025-10-08 19:42:23 | WARNING | HTTP error on https://api.lbkex.com/api/v2/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/trades?symbol=ETH_USDT&size=200
+2025-10-08 19:42:23 | WARNING | HTTP error on https://api.lbkex.com/api/v1/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/trades?symbol=ETH_USDT&size=200
+2025-10-08 19:42:23 | WARNING | No trades fetched for ETH (falling back).
+2025-10-08 19:42:25 | WARNING | HTTP error on https://api.lbkex.com/api/v2/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/depth?symbol=ETH_USDT&size=60
+2025-10-08 19:42:26 | WARNING | HTTP error on https://api.lbkex.com/api/v1/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/depth?symbol=ETH_USDT&size=60
+2025-10-08 19:42:26 | WARNING | No orderbook fetched for ETH.
+2025-10-08 19:42:27 | WARNING | HTTP error on https://api.lbkex.com/api/v2/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/trades?symbol=BNB_USDT&size=200
+2025-10-08 19:42:28 | WARNING | HTTP error on https://api.lbkex.com/api/v1/trades: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/trades?symbol=BNB_USDT&size=200
+2025-10-08 19:42:28 | WARNING | No trades fetched for BNB (falling back).
+2025-10-08 19:42:29 | WARNING | HTTP error on https://api.lbkex.com/api/v2/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v2/depth?symbol=BNB_USDT&size=60
+2025-10-08 19:42:30 | WARNING | HTTP error on https://api.lbkex.com/api/v1/depth: 404 Client Error: Not Found for url: https://api.lbkex.com/api/v1/depth?symbol=BNB_USDT&size=60
+2025-10-08 19:42:30 | WARNING | No orderbook fetched for BNB.
+2025-10-08 19:42:30 | WARNING | ⚠️ No real data collected — switching to DEMO rows.
+2025-10-08 19:42:30 | INFO | ✅ CSV saved: data/high_level_20251008_194230.csv
+2025-10-08 19:42:30 | INFO | ✅ CSV saved (latest): data/latest.csv
+2025-10-08 19:42:30 | INFO | ✅ Completed. Rows: 3
+2025-10-08 19:42:30 | INFO | 
+       timestamp_utc symbol  price_last  pct_change total_quote_5m  max_trade_usd  whale_detected whale_side  orderbook_sweep  sweep_depth_usd  coinglass_liq_buy_usd  coinglass_liq_sell_usd  oi_change_pct  funding_rate  signal_score signal_label                            run_file
+2025-10-08T19:42:30Z    BTC    100000.0         0.8           None         250000            True        buy             True           120000                 300000                   50000            2.1         0.010           8.0       strong data/high_level_20251008_194230.csv
+2025-10-08T19:42:30Z    ETH      4000.0        -0.6           None          50000            True       sell            False           500000                      0                       0           -1.0        -0.005           1.0         weak data/high_level_20251008_194230.csv
+2025-10-08T19:42:30Z    BNB       650.0         0.2           None         120000            True       sell             True            80000                  10000                  250000            0.5         0.000           8.0       strong data/high_level_20251008_194230.csv
