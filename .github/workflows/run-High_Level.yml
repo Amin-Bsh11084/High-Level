@@ -1,19 +1,10 @@
-name: High_Level Whale Monitor (LBank) - Full Pipeline
+name: High_Level Whale Monitor (Manual Run Only)
 
 on:
-  # اجرای دستی
-  workflow_dispatch:
-  # نمونه‌ی زمان‌بندی (UTC) — هر 5 دقیقه
-  schedule:
-    - cron: "*/5 * * * *"
+  workflow_dispatch:   # ✅ فقط اجرای دستی فعال است
 
-# برای push کردن لازم است
 permissions:
   contents: write
-
-concurrency:
-  group: high-level-pipeline
-  cancel-in-progress: false
 
 jobs:
   run:
@@ -43,63 +34,35 @@ jobs:
         run: |
           mkdir -p data logs
 
-      - name: Run High_Level.py (tee to log)
+      - name: Run High_Level.py
         shell: bash
         run: |
           set -o pipefail
           python -u High_Level.py 2>&1 | tee run_script_output.log
           echo "${PIPESTATUS[0]}" > run_exit_code.txt
 
-      # ===== artifacts & debugging (always) =====
-
-      - name: Upload run log (always)
+      - name: Upload run log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: high-level-run-log
           path: run_script_output.log
           retention-days: 7
-          if-no-files-found: warn
 
-      - name: Show exit code (always)
-        if: always()
-        run: |
-          echo "=== run exit code ==="
-          cat run_exit_code.txt || true
-
-      - name: Debug: list data and preview CSVs (always)
-        if: always()
-        run: |
-          echo "=== data folder listing ==="
-          ls -la data || true
-          for f in data/*; do
-            [ -e "$f" ] || continue
-            echo "---- FILE: $f ----"
-            head -n 50 "$f" || true
-            echo
-          done
-
-      - name: Upload data folder (always)
+      - name: Upload data folder
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: high-level-data-folder
           path: data
           retention-days: 7
-          if-no-files-found: warn
 
-      - name: Commit & push data + logs (safe)
+      - name: Commit & push data + logs
         if: always()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || true
           git add -A data logs run_script_output.log run_exit_code.txt || true
-          git commit -m "Update High_Level data & logs [skip ci]" || echo "No changes to commit"
+          git commit -m "Manual run - update High_Level data & logs [skip ci]" || echo "No changes to commit"
           git push origin main || echo "Nothing to push or push failed"
-
-      # اگر بخواهی Job در صورت خطا Fail شود، این مرحله را فعال کن:
-      # - name: Fail on non-zero exit
-      #   if: always()
-      #   run: |
-      #     test "$(cat run_exit_code.txt)" = "0" || { echo "❌ Script failed"; exit 1; }
