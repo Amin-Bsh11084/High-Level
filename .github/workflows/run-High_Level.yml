@@ -1,7 +1,7 @@
 name: High_Level Whale Monitor (Manual Run Only)
 
 on:
-  workflow_dispatch:   # ✅ فقط اجرای دستی فعال است
+  workflow_dispatch:   # فقط اجرای دستی
 
 permissions:
   contents: write
@@ -41,6 +41,8 @@ jobs:
           python -u High_Level.py 2>&1 | tee run_script_output.log
           echo "${PIPESTATUS[0]}" > run_exit_code.txt
 
+      # --- Artifacts & Debug ---
+
       - name: Upload run log
         if: always()
         uses: actions/upload-artifact@v4
@@ -48,6 +50,7 @@ jobs:
           name: high-level-run-log
           path: run_script_output.log
           retention-days: 7
+          if-no-files-found: warn
 
       - name: Upload data folder
         if: always()
@@ -56,6 +59,31 @@ jobs:
           name: high-level-data-folder
           path: data
           retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload latest CSV (separate)
+        if: always()
+        shell: bash
+        run: |
+          set -e
+          LATEST=$(ls -t data/*.csv 2>/dev/null | head -n1 || true)
+          if [ -n "$LATEST" ]; then
+            echo "Latest CSV: $LATEST"
+            cp "$LATEST" /tmp/latest_high_level.csv
+          else
+            echo "No CSV found in data/"
+            # ساخت یک فایل خالی برای اینکه آرتیفکت همیشه وجود داشته باشد (اختیاری)
+            echo "no csv generated" > /tmp/latest_high_level.csv
+          fi
+        # آرتیفکت فایل تکی
+      - name: Upload latest_high_level.csv
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-high-level-csv
+          path: /tmp/latest_high_level.csv
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Commit & push data + logs
         if: always()
