@@ -1777,3 +1777,9 @@
 2025-10-09 09:16:12 | No 4h movers beyond threshold; writing header-only CSV (no alerts).
 2025-10-09 09:16:12 | CSV saved -> data/high_level_20251009_091612.csv
 2025-10-09 09:16:12 | Done. scanned=0 | alerts=0 | ok=0 | skipped(o<=0)=0 | errors=400
+2025-10-09 13:23:20 | Window = 4h (KLINE) | Threshold = 5%
+2025-10-09 13:23:21 | Universe size = 400
+2025-10-09 13:24:52 | Scan empty: no candles fetched successfully.
+2025-10-09 13:24:52 | No 4h movers beyond threshold; writing header-only CSV (no alerts).
+2025-10-09 13:24:52 | CSV saved -> data/high_level_20251009_132452.csv
+2025-10-09 13:24:52 | Done. scanned=0 | alerts=0 | ok=0 | skipped(o<=0)=0 | errors=400
