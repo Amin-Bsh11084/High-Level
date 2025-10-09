@@ -1,20 +1,22 @@
-# High_Level.py — LBank 4h Movers via KLINE (±30%)
+# High_Level.py — LBank 4h Movers via KLINE (±10%)
 """
 چه می‌کند؟
-- از LBank لیست تمام جفت‌ها را می‌گیرد و فقط *_USDT نگه می‌دارد.
-- برای هر جفت با /v2/kline.do آخرین دو کندل 4h را می‌گیرد (type=hour4, size=2).
+- از LBank لیست تمام جفت‌ها را می‌گیرد و فقط *_USDT نگه می‌دارد (بدون توکن‌های اهرمی مثل 3L/3S/5L/5S).
+- برای هر جفت با /v2/kline.do آخرین دو کندل 4h را می‌گیرد (type=hour4, size=2) و پس از مرتب‌سازی زمانی،
+  «آخرین کندل کامل» را گزارش می‌کند.
 - روی «آخرین کندل کامل» درصد تغییر را محاسبه می‌کند: (close - open) / open.
-- فقط جفت‌هایی که |pct_change| >= ALERT (پیش‌فرض 0.30) باشند وارد CSV می‌شوند.
+- فقط جفت‌هایی که |pct_change| >= ALERT (پیش‌فرض 0.10) باشند وارد CSV می‌شوند.
 - خروجی تمیز: timestamp_utc, pair, open_4h, close_4h, pct_change_4h, kline_ts, alert
 
 ENVهای اختیاری:
   HL_MAX_SYMBOLS=400
-  HL_PRICE_ALERT=0.30
+  HL_PRICE_ALERT=0.10
   HL_FORCE_DEMO=false
   HL_REQ_TIMEOUT=15
   HL_REQ_PAUSE=0.05
 """
 import os
+import re
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -43,7 +45,7 @@ def _f(name: str, default: float) -> float:
 CFG = {
     "BASE": "https://api.lbkex.com",
     "MAX_SYMBOLS": _i("HL_MAX_SYMBOLS", 400),
-    "ALERT": _f("HL_PRICE_ALERT", 0.30),
+    "ALERT": _f("HL_PRICE_ALERT", 0.10),   # ← پیش‌فرض 10%
     "FORCE_DEMO": _b("HL_FORCE_DEMO", False),
     "REQ_TIMEOUT": _i("HL_REQ_TIMEOUT", 15),
     "REQ_PAUSE": _f("HL_REQ_PAUSE", 0.05),  # بین درخواست‌ها
@@ -91,21 +93,30 @@ def _get_json(path: str, params=None, tries: int = 3) -> Optional[dict | list]:
 # LBank endpoints (official)
 # - Available trading pairs: GET /v2/currencyPairs.do
 # - Kline (candles):         GET /v2/kline.do  (type=hour4, size up to 2000)
-# Docs: https://www.lbank.com/docs/index.html
 # ----------------------------
+_LEVERAGED_RE = re.compile(r".*_(\d+(l|s))_usdt$")  # btc3l_usdt, eth5s_usdt, ...
+
+def _is_spot_usdt(symbol: str) -> bool:
+    s = symbol.lower()
+    if not s.endswith("_usdt"):
+        return False
+    # حذف ETF/Leveraged (3L/3S/5L/5S و ...)
+    if _LEVERAGED_RE.match(s):
+        return False
+    return True
+
 def list_usdt_pairs() -> List[str]:
     data = _get_json("/v2/currencyPairs.do")
     items = data if isinstance(data, list) else (data or {}).get("data", [])
-    pairs = [str(p).lower() for p in items if str(p).lower().endswith("_usdt")]
+    pairs = [str(p).lower() for p in items if _is_spot_usdt(str(p))]
     pairs = sorted(set(pairs))
     return pairs
 
 def fetch_last_two_4h_candles(symbol: str) -> Optional[Tuple[int,float,float]]:
     """
-    برمی‌گرداند: (kline_ts_sec, open, close) برای آخرین کندل کامل.
-    توضیح: size=2 → [کندل قبلی، کندل جاری]. ما «کندل قبلی» را گزارش می‌کنیم.
+    برمی‌گرداند: (kline_ts_sec, open, close) برای «آخرین کندل کامل».
+    پیاده‌سازی امن: آرایه‌ی دریافتی را بر اساس timestamp مرتب می‌کنیم و کندل قبل از آخر را برمی‌داریم.
     """
-    # time (seconds) طبق داک لازم است
     now_sec = int(datetime.now(timezone.utc).timestamp())
     params = {
         "symbol": symbol,
@@ -116,9 +127,9 @@ def fetch_last_two_4h_candles(symbol: str) -> Optional[Tuple[int,float,float]]:
     data = _get_json("/v2/kline.do", params=params)
     if not isinstance(data, list) or len(data) < 2:
         return None
-    # هر سطر: [timestamp, open, high, low, close, volume]
-    prev = data[-2]
     try:
+        data_sorted = sorted(data, key=lambda x: int(x[0]))  # [ts, o, h, l, c, v]
+        prev = data_sorted[-2]  # آخرین کندل کامل
         ts_sec = int(prev[0])
         o = float(prev[1]); c = float(prev[4])
         return (ts_sec, o, c)
@@ -132,7 +143,7 @@ def build_demo(pairs: List[str]) -> pd.DataFrame:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = []
     for i, p in enumerate(pairs):
-        pct = 0.36 if (i % 9 == 0) else (-0.34 if (i % 13 == 0) else 0.05)
+        pct = 0.12 if (i % 7 == 0) else (-0.11 if (i % 11 == 0) else 0.04)
         rows.append({
             "timestamp_utc": now,
             "pair": p.upper(),
@@ -186,7 +197,7 @@ def main() -> int:
             if res is None:
                 continue
             ts_sec, o, c = res
-            if o <= 0: 
+            if o <= 0:
                 continue
             pct = (c - o) / o
             if abs(pct) >= CFG["ALERT"]:
