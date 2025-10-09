@@ -1,4 +1,4 @@
-2025-10-09 08:34:51 | Window = 4h (KLINE) | Threshold = 30%
-2025-10-09 08:36:02 | No 4h movers beyond threshold; writing header-only CSV (no alerts).
-2025-10-09 08:36:02 | CSV saved -> data/high_level_20251009_083602.csv
-2025-10-09 08:36:02 | Done. Alerts = 0
+2025-10-09 08:59:39 | Window = 4h (KLINE) | Threshold = 10%
+2025-10-09 09:00:51 | No 4h movers beyond threshold; writing header-only CSV (no alerts).
+2025-10-09 09:00:51 | CSV saved -> data/high_level_20251009_090051.csv
+2025-10-09 09:00:51 | Done. Alerts = 0
