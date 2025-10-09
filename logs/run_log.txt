@@ -1763,3 +1763,7 @@
 2025-10-08 22:18:58 | No 4h movers beyond threshold; writing empty (header-only) CSV.
 2025-10-08 22:18:58 | CSV saved -> data/high_level_20251008_221858.csv
 2025-10-08 22:18:58 | Done. Movers count = 0
+2025-10-09 08:34:51 | Window = 4h (KLINE) | Threshold = 30%
+2025-10-09 08:36:02 | No 4h movers beyond threshold; writing header-only CSV (no alerts).
+2025-10-09 08:36:02 | CSV saved -> data/high_level_20251009_083602.csv
+2025-10-09 08:36:02 | Done. Alerts = 0
